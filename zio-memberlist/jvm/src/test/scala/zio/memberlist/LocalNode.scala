@@ -42,7 +42,7 @@ class LocalNode(port: Int) extends zio.App {
     val config  = ZLayer.succeed(
       MemberlistConfig(
         name = NodeName("local_node_" + port),
-        port = port,
+        bindAddress = NodeAddress("localhost", port),
         protocolInterval = 1.second,
         protocolTimeout = 500.milliseconds,
         messageSizeLimit = 64000,

@@ -2,8 +2,6 @@ package zio.memberlist
 
 import zio._
 import zio.logging.{Logging, log}
-import zio.memberlist.encoding.ByteCodec
-import zio.memberlist.protocols.messages.WithPiggyback
 import zio.memberlist.transport.{Bind, Channel, ConnectionLessTransport}
 import zio.stream.Take
 
@@ -12,33 +10,20 @@ import zio.stream.Take
  */
 object ConnectionHandler {
 
-  private def read(connection: Channel, messages: Queue[Take[Error, Message[Chunk[Byte]]]]): IO[Error, Unit] =
+  private def read(connection: Channel, messages: Queue[Take[Error, (NodeAddress, Chunk[Byte])]]): IO[Error, Unit] =
     Take
       .fromEffect(
-        connection.read >>= ByteCodec[WithPiggyback].fromChunk
+        connection.address.flatMap(NodeAddress.fromSocketAddress) <*> connection.read
       )
       .flatMap {
-        _.foldM(
-          messages.offer(Take.end),
-          cause => messages.offer(Take.halt(cause)),
-          values =>
-            ZIO.foreach_(values) { withPiggyback =>
-              val take =
-                Take.single(Message.BestEffortByName(withPiggyback.node, withPiggyback.message))
-
-              messages.offer(take) *>
-                ZIO.foreach_(withPiggyback.gossip) { chunk =>
-                  messages.offer(Take.single(Message.BestEffortByName(withPiggyback.node, chunk)))
-                }
-            }
-        )
+        messages.offer(_)
       }
       .unit
 
   def bind(
     local: NodeAddress,
     transport: ConnectionLessTransport,
-    messages: Queue[Take[Error, Message[Chunk[Byte]]]]
+    messages: Queue[Take[Error, (NodeAddress, Chunk[Byte])]]
   ): ZManaged[Logging, TransportError, Bind] =
     for {
       localAddress <- local.socketAddress.toManaged_

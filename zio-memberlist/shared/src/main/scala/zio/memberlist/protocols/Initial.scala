@@ -16,37 +16,17 @@ object Initial {
   def protocol(localAddr: NodeAddress, localName: NodeName): ZIO[Env, Error, Protocol[messages.Initial]] =
     Protocol[messages.Initial].make(
       {
-        case Message.BestEffortByName(_, Join(addr, _)) if addr == localAddr =>
-          Message.noResponse
-        case Message.BestEffortByName(_, join @ Join(addr, name))            =>
-          ZSTM.atomically(
-            Nodes
-              .nodeState(name)
-              .as(Message.NoResponse)
-              .orElse(
-                Nodes.addNode(Node(name, addr, Chunk.empty, NodeState.Alive))
-              )
-              .as(
-                Message
-                  .Batch[messages.Initial](Message.BestEffortByName(name, Accept(localAddr)), Message.Broadcast(join))
-              )
-          )
-
-        case Message.BestEffortByName(sender, Accept(addr)) =>
-          ZSTM.atomically(
-            Nodes.addNode(Node(sender, addr, Chunk.empty, NodeState.Alive)) *>
-              Nodes.changeNodeState(sender, NodeState.Alive).as(Message.NoResponse)
-          )
-        case Message.BestEffortByName(sender, Reject(msg))  =>
-          log.error("Rejected from cluster: " + msg) *>
-            Nodes.disconnect(sender).as(Message.NoResponse).commit
+        //to powinna byc tupla
+        case (addr, PushPull(state, join)) =>
+          //musimy trzymac jakos connection zeby odpowiedziec tym samym
+          ???
       },
       ZStream
         .fromIterableM(Discovery.discoverNodes.tap(otherNodes => log.info("Discovered other nodes: " + otherNodes)))
-        .mapM { node =>
+        .mapM { inetSocketAddress =>
           NodeAddress
-            .fromSocketAddress(node)
-            .map(nodeAddress => Message.BestEffortByAddress(nodeAddress, Join(localAddr, localName)))
+            .fromSocketAddress(inetSocketAddress)
+            .map(nodeAddress => Message.ReliableByAddress(nodeAddress, PushPull(Chunk.empty, true)))
         }
     )
 

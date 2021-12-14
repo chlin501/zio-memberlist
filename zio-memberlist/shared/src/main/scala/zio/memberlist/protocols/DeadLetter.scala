@@ -9,7 +9,7 @@ object DeadLetter {
 
   def protocol: ZIO[Logging, Error, Protocol[Chunk[Byte]]] =
     Protocol[Chunk[Byte]].make(
-      msg => log(LogLevel.Error)("message [" + msg + "] in dead letter") *> Message.noResponse,
+      (_, msg) => log(LogLevel.Error)("message [" + msg + "] in dead letter") *> Message.noResponse,
       ZStream.empty
     )
 

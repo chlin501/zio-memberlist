@@ -3,18 +3,19 @@ package zio.memberlist
 import zio.clock.Clock
 import zio.logging.{Logging, log}
 import zio.memberlist.encoding.ByteCodec
-import zio.memberlist.protocols.messages.WithPiggyback
+import zio.memberlist.protocols.messages.Compound
 import zio.memberlist.state.{NodeName, Nodes}
-import zio.memberlist.transport.ConnectionLessTransport
-import zio.nio.core.SocketAddress
+import zio.memberlist.transport.{ChunkConnection, ConnectionLessTransport, Transport}
+import zio.stm.TMap
 import zio.stream.{Take, ZStream}
 import zio.{Cause, Chunk, Exit, Fiber, Has, IO, Queue, ZIO, ZManaged}
 
 class MessageSink(
   val local: NodeName,
-  messages: Queue[Take[Error, Message[Chunk[Byte]]]],
+  commands: Queue[Take[Error, (NodeAddress, Chunk[Byte])]],
   broadcast: Broadcast,
-  sendBestEffort: (SocketAddress, Chunk[Byte]) => IO[TransportError, Unit]
+  sendBestEffort: (NodeAddress, Chunk[Byte]) => IO[TransportError, Unit],
+  sendReliable: (NodeAddress, Chunk[Byte]) => IO[TransportError, Unit]
 ) {
 
   /**
@@ -26,16 +27,15 @@ class MessageSink(
       case Message.BestEffortByName(nodeName, message)       =>
         for {
           broadcast    <- broadcast.broadcast(message.size)
-          withPiggyback = WithPiggyback(local, message, broadcast)
-          chunk        <- ByteCodec[WithPiggyback].toChunk(withPiggyback)
-          nodeAddress  <- Nodes.nodeAddress(nodeName).commit.flatMap(_.socketAddress)
+          withPiggyback = Compound(message :: broadcast)
+          chunk        <- ByteCodec[Compound].toChunk(withPiggyback)
+          nodeAddress  <- Nodes.nodeAddress(nodeName).commit
           _            <- sendBestEffort(nodeAddress, chunk)
         } yield ()
       case Message.BestEffortByAddress(nodeAddress, message) =>
         for {
-          chunk         <- ByteCodec[WithPiggyback].toChunk(WithPiggyback(local, message, Nil))
-          socketAddress <- nodeAddress.socketAddress
-          _             <- sendBestEffort(socketAddress, chunk)
+          chunk <- ByteCodec[Compound].toChunk(Compound(message :: Nil))
+          _     <- sendBestEffort(nodeAddress, chunk)
         } yield ()
       case msg: Message.Batch[Chunk[Byte] @unchecked]        =>
         val (broadcast, rest) =
@@ -48,26 +48,27 @@ class MessageSink(
         send(message) *> action.delay(timeout).flatMap(send).unit
     }
 
+  private def processTake(
+    take: Take[Error, Message[Chunk[Byte]]]
+  ): ZIO[Clock with Logging with Has[Nodes], Nothing, Unit] =
+    take.foldM(
+      ZIO.unit,
+      log.error("error: ", _),
+      ZIO.foreach_(_)(send(_).catchAll(e => log.throwable("error during send", e)))
+    )
+
   def process(
     protocol: Protocol[Chunk[Byte]]
-  ): ZIO[Clock with Logging with Has[Nodes], Nothing, Fiber.Runtime[Nothing, Unit]] = {
-    def processTake(take: Take[Error, Message[Chunk[Byte]]]) =
-      take.foldM(
-        ZIO.unit,
-        log.error("error: ", _),
-        ZIO.foreach_(_)(send(_).catchAll(e => log.throwable("error during send", e)))
-      )
+  ): ZIO[Clock with Logging with Has[Nodes], Nothing, Fiber.Runtime[Nothing, Unit]] =
     ZStream
-      .fromQueue(messages)
+      .fromQueue(commands)
       .mapMPar(10) {
         case Take(Exit.Failure(cause)) =>
           log.error("error during processing messages.", cause)
         case Take(Exit.Success(msgs))  =>
-          ZIO.foreach(msgs) {
-            case msg: Message.BestEffortByName[Chunk[Byte] @unchecked] =>
-              Take.fromEffect(protocol.onMessage(msg)).flatMap(processTake(_))
-            case _                                                     =>
-              ZIO.dieMessage("Something went horribly wrong.")
+          ZIO.foreach(msgs) { msg =>
+            Take.fromEffect(protocol.onMessage.tupled(msg)).flatMap(processTake(_))
+
           }
       }
       .runDrain
@@ -77,7 +78,6 @@ class MessageSink(
         .mapMPar(10)(processTake)
         .runDrain
         .fork
-  }
 }
 
 object MessageSink {
@@ -94,13 +94,22 @@ object MessageSink {
     local: NodeName,
     nodeAddress: NodeAddress,
     broadcast: Broadcast,
-    udpTransport: ConnectionLessTransport
+    udpTransport: ConnectionLessTransport,
+    tcpTransport: Transport
   ): ZManaged[Logging, TransportError, MessageSink] =
     for {
-      messageQueue <- Queue
-                        .bounded[Take[Error, Message[Chunk[Byte]]]](1000)
-                        .toManaged(_.shutdown)
-      bind         <- ConnectionHandler.bind(nodeAddress, udpTransport, messageQueue)
-    } yield new MessageSink(local, messageQueue, broadcast, bind.send)
+      messageQueue    <- Queue
+                           .bounded[Take[Error, (NodeAddress, Chunk[Byte])]](1000)
+                           .toManaged(_.shutdown)
+      connectionCache <- TMap.empty[NodeAddress, ChunkConnection].commit.toManaged_
+      bindUdp         <- ConnectionHandler.bind(nodeAddress, udpTransport, messageQueue)
+      //bindTcp <- tcpTransport.bind(nodeAddress).mapM(conn => conn.)
+    } yield new MessageSink(
+      local,
+      messageQueue,
+      broadcast,
+      (addr, chunk) => addr.socketAddress.flatMap(bindUdp.send(_, chunk)),
+      tcpTransport.send
+    )
 
 }

@@ -28,27 +28,27 @@ object FailureDetection {
     localNode: NodeName
   ): ZIO[Env, Error, Protocol[messages.FailureDetection]] =
     TMap
-      .empty[Long, (NodeName, Long)]
+      .empty[Long, (NodeAddress, Long)]
       .commit
       .flatMap { pingReqs =>
         Protocol[messages.FailureDetection].make(
           {
-            case Message.BestEffortByName(sender, msg @ Ack(seqNo)) =>
+            case (sender, msg @ Ack(seqNo)) =>
               log.debug(s"received ack[$seqNo] from $sender") *>
                 ZSTM.atomically(
                   MessageAcknowledge.ack(msg) *>
                     pingReqs.get(seqNo).map {
                       case Some((originalNode, originalSeqNo)) =>
-                        Message.BestEffortByName(originalNode, Ack(originalSeqNo))
+                        Message.BestEffortByAddress(originalNode, Ack(originalSeqNo))
                       case None                                =>
                         Message.NoResponse
                     } <* LocalHealthMultiplier.decrease
                 )
 
-            case Message.BestEffortByName(sender, Ping(seqNo)) =>
-              ZIO.succeedNow(Message.BestEffortByName(sender, Ack(seqNo)))
+            case (sender, Ping(seqNo)) =>
+              ZIO.succeedNow(Message.BestEffortByAddress(sender, Ack(seqNo)))
 
-            case Message.BestEffortByName(sender, PingReq(originalSeqNo, to)) =>
+            case (sender, PingReq(originalSeqNo, to)) =>
               MessageSequenceNo.next
                 .map(newSeqNo => Ping(newSeqNo))
                 .flatMap(ping =>
@@ -61,7 +61,7 @@ object FailureDetection {
                           case Some((sender, originalSeqNo)) =>
                             pingReqs
                               .delete(ping.seqNo)
-                              .as(Message.BestEffortByName(sender, Nack(originalSeqNo)))
+                              .as(Message.BestEffortByAddress(sender, Nack(originalSeqNo)))
                           case _                             =>
                             STM.succeedNow(Message.NoResponse)
                         }
@@ -70,19 +70,19 @@ object FailureDetection {
                     )
                 )
                 .commit
-            case Message.BestEffortByName(_, msg @ Nack(_))                   =>
+            case (_, msg @ Nack(_))                   =>
               MessageAcknowledge.ack(msg).commit *>
                 Message.noResponse
 
-            case Message.BestEffortByName(sender, Suspect(accusedIncarnation, _, `localNode`)) =>
+            case (sender, Suspect(accusedIncarnation, _, `localNode`)) =>
               ZSTM.atomically(
                 IncarnationSequence.nextAfter(accusedIncarnation).map { incarnation =>
                   val alive = Alive(incarnation, localNode)
-                  Message.Batch(Message.BestEffortByName(sender, alive), Message.Broadcast(alive))
+                  Message.Batch(Message.BestEffortByAddress(sender, alive), Message.Broadcast(alive))
                 } <* LocalHealthMultiplier.increase
               )
 
-            case Message.BestEffortByName(from, Suspect(incarnation, _, node)) =>
+            case (from, Suspect(incarnation, _, node)) =>
               IncarnationSequence.current
                 .zip(
                   nodeState(node).orElseSucceed(NodeState.Dead)
@@ -93,18 +93,19 @@ object FailureDetection {
                   case (_, NodeState.Dead)                                     =>
                     STM.unit
                   case (_, NodeState.Suspect)                                  =>
-                    SuspicionTimeout.incomingSuspect(node, from)
+                    STM.unit
+                  //SuspicionTimeout.incomingSuspect(node, from)
                   case (_, _)                                                  =>
                     changeNodeState(node, NodeState.Suspect).ignore
                 }
                 .commit *> Message.noResponse
 
-            case Message.BestEffortByName(sender, msg @ Dead(_, _, nodeAddress)) if sender == nodeAddress =>
+            case (sender, msg @ Dead(_, _, nodeAddress)) if sender == nodeAddress =>
               changeNodeState(nodeAddress, NodeState.Left).ignore
                 .as(Message.Broadcast(msg))
                 .commit
 
-            case Message.BestEffortByName(_, msg @ Dead(_, _, nodeAddress)) =>
+            case (_, msg @ Dead(_, _, nodeAddress)) =>
               nodeState(nodeAddress)
                 .orElseSucceed(NodeState.Dead)
                 .flatMap {
@@ -116,7 +117,7 @@ object FailureDetection {
                 }
                 .commit
 
-            case Message.BestEffortByName(_, msg @ Alive(_, nodeAddress)) =>
+            case (_, msg @ Alive(_, nodeAddress)) =>
               ZSTM.atomically(
                 SuspicionTimeout.cancelTimeout(nodeAddress) *>
                   changeNodeState(nodeAddress, NodeState.Alive).ignore

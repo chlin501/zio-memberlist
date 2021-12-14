@@ -23,11 +23,11 @@ trait Protocol[M] {
   final def binary(implicit codec: ByteCodec[M]): Protocol[Chunk[Byte]] =
     new Protocol[Chunk[Byte]] {
 
-      override val onMessage: Message.BestEffortByName[Chunk[Byte]] => IO[Error, Message[Chunk[Byte]]] =
-        msg =>
+      override val onMessage: (NodeAddress, Chunk[Byte]) => IO[Error, Message[Chunk[Byte]]] =
+        (addr, msg) =>
           ByteCodec
-            .decode[M](msg.message)
-            .flatMap(decoded => self.onMessage(msg.copy(message = decoded)))
+            .decode[M](msg)
+            .flatMap(decoded => self.onMessage(addr, decoded))
             .flatMap(_.transformM(ByteCodec.encode[M]))
 
       override val produceMessages: Stream[Error, Message[Chunk[Byte]]] =
@@ -40,11 +40,11 @@ trait Protocol[M] {
   val debug: ZIO[Logging, Error, Protocol[M]] =
     ZIO.access[Logging] { env =>
       new Protocol[M] {
-        override def onMessage: Message.BestEffortByName[M] => IO[Error, Message[M]] =
-          msg =>
+        override def onMessage: (NodeAddress, M) => IO[Error, Message[M]] =
+          (addr, msg) =>
             env.get.log(LogLevel.Trace)("Receive [" + msg + "]") *>
               self
-                .onMessage(msg)
+                .onMessage(addr, msg)
                 .tap(msg => env.get.log(LogLevel.Trace)("Replied with [" + msg + "]"))
 
         override val produceMessages: Stream[Error, Message[M]] =
@@ -57,7 +57,7 @@ trait Protocol[M] {
   /**
    * Handler for incomming messages.
    */
-  def onMessage: Message.BestEffortByName[M] => IO[Error, Message[M]]
+  def onMessage: (NodeAddress, M) => IO[Error, Message[M]]
 
   /**
    * Stream of outgoing messages.
@@ -75,14 +75,15 @@ object Protocol {
       a3: Protocol[A3]
     ) = new Protocol[A] {
 
-      override val onMessage: Message.BestEffortByName[A] => IO[Error, Message[A]] = {
-        case msg: Message.BestEffortByName[A1 @unchecked] if classTag[A1].runtimeClass.isInstance(msg.message) =>
-          a1.onMessage(msg)
-        case msg: Message.BestEffortByName[A2 @unchecked] if classTag[A2].runtimeClass.isInstance(msg.message) =>
-          a2.onMessage(msg)
-        case msg: Message.BestEffortByName[A3 @unchecked] if classTag[A3].runtimeClass.isInstance(msg.message) =>
-          a3.onMessage(msg)
-        case _                                                                                                 => Message.noResponse
+      override val onMessage: (NodeAddress, A) => IO[Error, Message[A]] = {
+        case msg: (NodeAddress @unchecked, A1 @unchecked) if classTag[A1].runtimeClass.isInstance(msg) =>
+          a1.onMessage.tupled(msg)
+        case msg: (NodeAddress @unchecked, A2 @unchecked) if classTag[A2].runtimeClass.isInstance(msg) =>
+          a2.onMessage.tupled(msg)
+        case msg: (NodeAddress @unchecked, A3 @unchecked) if classTag[A3].runtimeClass.isInstance(msg) =>
+          a3.onMessage.tupled(msg)
+        case _                                                                                         =>
+          Message.noResponse
 
       }
 
@@ -103,14 +104,14 @@ object Protocol {
   class ProtocolBuilder[M] {
 
     def make[R, R1](
-      in: Message.BestEffortByName[M] => ZIO[R, Error, Message[M]],
+      in: (NodeAddress, M) => ZIO[R, Error, Message[M]],
       out: zio.stream.ZStream[R1, Error, Message[M]]
     ): ZIO[R with R1, Error, Protocol[M]] =
       ZIO.access[R with R1](env =>
         new Protocol[M] {
 
-          override val onMessage: Message.BestEffortByName[M] => IO[Error, Message[M]] =
-            msg => in(msg).provide(env)
+          override val onMessage: (NodeAddress, M) => IO[Error, Message[M]] =
+            (addr, msg) => in(addr, msg).provide(env)
 
           override val produceMessages: Stream[Error, Message[M]] =
             out.provide(env)

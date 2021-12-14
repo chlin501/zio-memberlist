@@ -2,6 +2,7 @@ package zio.memberlist.transport
 
 import zio.memberlist.TransportError
 import zio.memberlist.TransportError.ExceptionWrapper
+import zio.nio.core.InetSocketAddress
 import zio.{Chunk, IO, _}
 
 import java.math.BigInteger
@@ -15,6 +16,7 @@ import java.math.BigInteger
  * @param finalizer - finalizer to underlying transport.
  */
 final class Channel(
+  val address: IO[TransportError, InetSocketAddress],
   val read0: Int => IO[TransportError, Chunk[Byte]],
   val write0: Chunk[Byte] => IO[TransportError, Unit],
   val isOpen: IO[TransportError, Boolean],
@@ -49,6 +51,7 @@ object Channel {
    * Creates synchronized Connection on read and write.
    */
   def withLock(
+    address: IO[TransportError, InetSocketAddress],
     read: Int => IO[TransportError, Chunk[Byte]],
     write: Chunk[Byte] => IO[TransportError, Unit],
     isOpen: IO[TransportError, Boolean],
@@ -58,6 +61,7 @@ object Channel {
       writeLock <- Semaphore.make(1)
       readLock  <- Semaphore.make(1)
     } yield new Channel(
+      address,
       bytes => readLock.withPermit(read(bytes)),
       chunk => writeLock.withPermit(write(chunk)),
       isOpen,

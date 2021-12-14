@@ -3,6 +3,7 @@ package zio.memberlist
 import izumi.reflect.Tag
 import zio.clock.Clock
 import zio.config._
+import zio.duration._
 import zio.logging._
 import zio.memberlist.discovery.Discovery
 import zio.memberlist.encoding.ByteCodec
@@ -39,12 +40,13 @@ object Memberlist   {
       for {
         env              <- ZManaged.environment[Has[MessageSequenceNo] with Has[Nodes]]
         localConfig      <- getConfig[MemberlistConfig].toManaged_
-        _                <- log.info("starting SWIM on port: " + localConfig.port).toManaged_
+        _                <- log.info("starting Memberlist on port: " + localConfig.bindAddress.port).toManaged_
         udpTransport     <- transport.udp.live(localConfig.messageSizeLimit).build.map(_.get)
-        userIn           <- Queue.bounded[Message.BestEffortByName[B]](QueueSize).toManaged(_.shutdown)
-        userOut          <- Queue.bounded[Message.BestEffortByName[B]](QueueSize).toManaged(_.shutdown)
+        tcpTransport     <- transport.tcp.make(64, 5.seconds, 5.seconds).build.map(_.get)
+        userIn           <- Queue.bounded[Message[B]](QueueSize).toManaged(_.shutdown)
+        userOut          <- Queue.bounded[Message[B]](QueueSize).toManaged(_.shutdown)
         localNodeName     = localConfig.name
-        localAddress     <- NodeAddress.local(localConfig.port).toManaged_
+        localAddress      = localConfig.bindAddress
         initial          <- Initial.protocol(localAddress, localNodeName).toManaged_
         failureDetection <- FailureDetection
                               .protocol(localConfig.protocolInterval, localConfig.protocolTimeout, localNodeName)
@@ -55,7 +57,7 @@ object Memberlist   {
         allProtocols = Protocol.compose[MemberlistMessage](initial, failureDetection, user).binary
         broadcast0  <- Broadcast.make(localConfig.messageSizeLimit, localConfig.broadcastResent).toManaged_
 
-        messages0 <- MessageSink.make(localNodeName, localAddress, broadcast0, udpTransport)
+        messages0 <- MessageSink.make(localNodeName, localAddress, broadcast0, udpTransport, tcpTransport)
         _         <- messages0.process(allProtocols).toManaged_
         localNode  = Node(localConfig.name, localAddress, Chunk.empty, NodeState.Alive)
         _         <- env.get[Nodes].addNode(localNode).commit.toManaged_

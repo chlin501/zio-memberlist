@@ -2,6 +2,7 @@ package zio.memberlist
 
 import zio.duration.Duration
 import zio.memberlist.state.NodeName
+import zio.memberlist.transport.ConnectionId
 import zio.nio.core.SocketAddress
 
 sealed abstract class Error(val msg: String = "", val cause: Throwable = null) extends Exception(msg, cause)
@@ -74,6 +75,9 @@ object TransportError {
 
   final case class ChannelClosed(socketAddress: SocketAddress)
       extends TransportError(msg = s"Channel to $socketAddress is closed")
+
+  final case class ConnectionNotFound(connectionId: ConnectionId)
+      extends TransportError(msg = s"Connection with id $connectionId not found")
 }
 
 object SwimError {

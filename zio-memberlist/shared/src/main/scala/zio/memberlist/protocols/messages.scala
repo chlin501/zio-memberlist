@@ -5,8 +5,8 @@ import zio.Chunk
 import zio.memberlist.NodeAddress
 import zio.memberlist.encoding.ByteCodec
 import zio.memberlist.protocols.messages.FailureDetection.{Ack, Alive, Dead, Ping, PingReq, Suspect}
-import zio.memberlist.protocols.messages.Initial.{Accept, Join, Reject}
-import zio.memberlist.state.NodeName
+import zio.memberlist.protocols.messages.Initial.PushPull
+import zio.memberlist.state.{NodeName, NodeState}
 
 object messages {
 
@@ -15,9 +15,7 @@ object messages {
   object MemberlistMessage {
     implicit def codec[A: ByteCodec]: ByteCodec[MemberlistMessage] =
       ByteCodec.tagged[MemberlistMessage][
-        Join,
-        Accept,
-        Reject,
+        PushPull,
         Ping,
         PingReq,
         Ack,
@@ -32,7 +30,9 @@ object messages {
 
   object FailureDetection {
 
-    final case class Ping(seqNo: Long) extends FailureDetection
+    final case class Ping(
+      seqNo: Long
+    ) extends FailureDetection
 
     final case class Ack(seqNo: Long) extends FailureDetection
 
@@ -69,26 +69,26 @@ object messages {
 
   }
 
-  case class PushPull()
-
   sealed trait Initial extends MemberlistMessage
 
   object Initial {
 
-    final case class Join(nodeAddress: NodeAddress, nodeName: NodeName) extends Initial
+    case class NodeViewSnapshot(
+      name: NodeName,
+      nodeAddress: NodeAddress,
+      meta: Chunk[Byte],
+      incarnation: Long,
+      state: NodeState
+    )
 
-    case class Accept(nodeAddress: NodeAddress) extends Initial
+    case class PushPull(nodes: Chunk[NodeViewSnapshot], join: Boolean) extends Initial
 
-    final case class Reject(msg: String) extends Initial
+    implicit val nodeViewSnapshotRW: ReadWriter[NodeViewSnapshot] =
+      macroRW[NodeViewSnapshot]
 
-    implicit val joinCodec: ByteCodec[Join] =
-      ByteCodec.fromReadWriter(macroRW[Join])
+    implicit val localStateCodec: ByteCodec[PushPull] =
+      ByteCodec.fromReadWriter(macroRW[PushPull])
 
-    implicit val acceptCodec: ByteCodec[Accept] =
-      ByteCodec.fromReadWriter(macroRW[Accept])
-
-    implicit val rejectCodec: ByteCodec[Reject] =
-      ByteCodec.fromReadWriter(macroRW[Reject])
   }
 
   final case class User[A](msg: A) extends MemberlistMessage
@@ -98,15 +98,13 @@ object messages {
       ev.bimap(User.apply, _.msg)
   }
 
-  final case class WithPiggyback(
-    node: NodeName,
-    message: Chunk[Byte],
-    gossip: List[Chunk[Byte]]
+  final case class Compound(
+    parts: List[Chunk[Byte]]
   ) extends MemberlistMessage
 
-  object WithPiggyback {
-    implicit val codec: ByteCodec[WithPiggyback] =
-      ByteCodec.fromReadWriter(macroRW[WithPiggyback])
+  object Compound {
+    implicit val codec: ByteCodec[Compound] =
+      ByteCodec.fromReadWriter(macroRW[Compound])
 
     implicit val chunkRW: ReadWriter[Chunk[Byte]] =
       implicitly[ReadWriter[Array[Byte]]]

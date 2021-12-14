@@ -8,7 +8,7 @@ import zio.{Has, ZLayer}
 
 case class MemberlistConfig(
   name: NodeName,
-  port: Int,
+  bindAddress: NodeAddress,
   protocolInterval: Duration,
   protocolTimeout: Duration,
   messageSizeLimit: Int,
@@ -23,7 +23,12 @@ object MemberlistConfig {
 
   val description: ConfigDescriptor[MemberlistConfig] =
     (string("NAME").apply[NodeName](NodeName(_), nn => Some(nn.name)) |@|
-      int("PORT").default(5557) |@|
+      string("ADDRESS")
+        .default("0.0.0.0")
+        .zip(int("PORT").default(5557))[NodeAddress](
+          { case (addr, port) => NodeAddress(addr, port) },
+          address => Some((address.hostName, address.port))
+        ) |@|
       zioDuration("PROTOCOL_INTERVAL").default(1.second) |@|
       zioDuration("PROTOCOL_TIMEOUT").default(500.milliseconds) |@|
       int("MESSAGE_SIZE_LIMIT").default(64000) |@|

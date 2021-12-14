@@ -38,7 +38,7 @@ object TestNode extends zio.App {
                         .byName("zio.memberlist-node.zio.memberlist-experiment.svc.cluster.local")
                         .orDie
                         .toManaged_
-        discovery  <- Discovery.k8Dns(serviceDns, 10.seconds, appConfig.port).build.map(_.get)
+        discovery  <- Discovery.k8Dns(serviceDns, 10.seconds, appConfig.bindAddress.port).build.map(_.get)
       } yield discovery
     )
 

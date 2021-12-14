@@ -93,8 +93,6 @@ object Nodes {
   def events: ZStream[Has[Nodes], Nothing, MembershipEvent] =
     ZStream.accessStream[Has[Nodes]](_.get.events)
 
-  final case class NodeStateChanged(node: Node, oldState: NodeState, newState: NodeState)
-
   def live0(localNode0: NodeName): ZIO[Logging with Clock, Nothing, Nodes] =
     for {
       nodeStates       <- TMap.empty[NodeName, Node].commit

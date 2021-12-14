@@ -6,7 +6,7 @@ import zio.logging.{Logging, log}
 import zio.memberlist.TransportError
 import zio.memberlist.TransportError._
 import zio.nio.channels.{Channel => _, _}
-import zio.nio.core.{Buffer, SocketAddress}
+import zio.nio.core.{Buffer, InetSocketAddress, SocketAddress}
 
 object udp {
 
@@ -35,9 +35,10 @@ object udp {
                     .mapError(ExceptionWrapper(_))
                     .zipLeft(buffer.flip)
                     .flatMap {
-                      case Some(remoteAddr) =>
+                      case Some(remoteAddr: InetSocketAddress) =>
                         connectionHandler(
                           new Channel(
+                            ZIO.succeed(remoteAddr),
                             bytes => buffer.getChunk(bytes),
                             chunk =>
                               Buffer.byte(chunk).flatMap(server.send(_, remoteAddr)).mapError(ExceptionWrapper(_)).unit,
@@ -45,8 +46,8 @@ object udp {
                             ZIO.unit
                           )
                         )
-                      case None             =>
-                        ZIO.unit //this is situation when channel is configure for non blocking.
+                      case _                                   =>
+                        ZIO.dieMessage("address for connection unavailable")
                     }
                 )
                 .forever

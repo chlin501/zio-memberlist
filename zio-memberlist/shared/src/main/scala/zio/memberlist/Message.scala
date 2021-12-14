@@ -15,6 +15,10 @@ sealed trait Message[+A] {
         fn(msg.message).map(b => msg.copy(message = b))
       case msg: Message.BestEffortByAddress[A @unchecked] =>
         fn(msg.message).map(b => msg.copy(message = b))
+      case msg: Message.ReliableByName[A @unchecked]      =>
+        fn(msg.message).map(b => msg.copy(message = b))
+      case msg: Message.ReliableByAddress[A @unchecked]   =>
+        fn(msg.message).map(b => msg.copy(message = b))
       case msg: Message.Broadcast[A @unchecked]           =>
         fn(msg.message).map(b => msg.copy(message = b))
       case msg: Message.Batch[A @unchecked]               =>
@@ -37,6 +41,12 @@ object Message {
   final case class BestEffortByName[A](node: NodeName, message: A) extends Message[A]
 
   final case class BestEffortByAddress[A](node: NodeAddress, message: A) extends Message[A]
+
+  final case class ReliableByAddress[A](node: NodeAddress, message: A) extends Message[A]
+
+  final case class ReliableByConnection[A](node: NodeAddress, message: A) extends Message[A]
+
+  final case class ReliableByName[A](node: NodeName, message: A) extends Message[A]
 
   final case class Batch[A](first: Message[A], second: Message[A], rest: Message[A]*) extends Message[A]
 
