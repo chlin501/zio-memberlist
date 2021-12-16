@@ -1,8 +1,10 @@
 package zio.memberlist.transport
 
-import zio.{Chunk, Has, IO, ZIO}
+import zio.{Chunk, Has, IO, ZIO, ZManaged}
 import zio.memberlist.{NodeAddress, TransportError}
-import zio.stream.{UStream, ZStream, Stream}
+import zio.stream.{Stream, UStream, ZStream}
+
+import java.io.InputStream
 
 trait MemberlistTransport {
 
@@ -16,7 +18,7 @@ trait MemberlistTransport {
 
   val receiveBestEffort: UStream[Either[TransportError, (NodeAddress, Chunk[Byte])]]
 
-  val receiveReliable: UStream[(ConnectionId, Stream[TransportError, Byte])]
+  val receiveReliable: UStream[(ConnectionId, ZManaged[Any, TransportError, InputStream])]
 
 }
 
@@ -44,7 +46,8 @@ object MemberlistTransport {
     : ZStream[Has[MemberlistTransport], Nothing, Either[TransportError, (NodeAddress, Chunk[Byte])]] =
     ZStream.accessStream(_.get.receiveBestEffort)
 
-  val receiveReliable: ZStream[Has[MemberlistTransport], Nothing, (ConnectionId, Stream[TransportError, Byte])] =
+  val receiveReliable
+    : ZStream[Has[MemberlistTransport], Nothing, (ConnectionId, ZManaged[Any, TransportError, InputStream])] =
     ZStream.accessStream(_.get.receiveReliable)
 
 }

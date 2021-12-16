@@ -1,12 +1,13 @@
 package zio.memberlist.protocols
 
 import upickle.default._
-import zio.Chunk
-import zio.memberlist.NodeAddress
 import zio.memberlist.encoding.ByteCodec
 import zio.memberlist.protocols.messages.FailureDetection.{Ack, Alive, Dead, Ping, PingReq, Suspect}
 import zio.memberlist.protocols.messages.Initial.PushPull
 import zio.memberlist.state.{NodeName, NodeState}
+import zio.memberlist.{NodeAddress, SerializationError}
+import zio.{Chunk, IO, memberlist}
+import zio.stream.Stream
 
 object messages {
 
@@ -95,7 +96,16 @@ object messages {
 
   object User {
     implicit def codec[A](implicit ev: ByteCodec[A]): ByteCodec[User[A]] =
-      ev.bimap(User.apply, _.msg)
+      new ByteCodec[User[A]] {
+        override def fromChunk(chunk: Chunk[Byte]): IO[SerializationError.DeserializationTypeError, User[A]] =
+          ev.fromChunk(chunk).map(User(_))
+
+        override def fromStream(
+          stream: Stream[memberlist.Error, Byte]
+        ): Stream[SerializationError.DeserializationTypeError, User[A]] = ev.fromStream(stream).map(User(_))
+
+        override def toChunk(a: User[A]): IO[SerializationError.SerializationTypeError, Chunk[Byte]] = ev.toChunk(a.msg)
+      }
   }
 
   final case class Compound(

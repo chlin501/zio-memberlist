@@ -7,16 +7,25 @@ import zio.memberlist.{MemberlistConfig, NodeAddress, TransportError}
 import zio.nio.channels.{AsynchronousServerSocketChannel, AsynchronousSocketChannel, DatagramChannel}
 import zio.nio.core.{Buffer, ByteBuffer, InetSocketAddress}
 import zio.stm.TMap
-import zio.stream.{Stream, UStream, ZStream}
-import zio.{Chunk, Has, IO, Queue, ZIO, ZLayer, ZManaged, ZQueue}
+import zio.stream.{UStream, ZStream}
+import zio.{Chunk, Has, IO, Managed, Queue, Task, ZIO, ZLayer, ZManaged, ZQueue}
 
-import java.io.EOFException
+import java.io.{EOFException, InputStream}
+import java.lang.{Void => JVoid}
+import java.net.{InetSocketAddress => JInetSocketAddress}
+import java.nio.ByteBuffer
+import java.nio.channels.{
+  Channels,
+  InterruptedByTimeoutException,
+  AsynchronousServerSocketChannel => JAsynchronousServerSocketChannel,
+  AsynchronousSocketChannel => JAsynchronousSocketChannel
+}
 
 class NetTransport(
   override val bindAddress: NodeAddress,
   datagramChannel: DatagramChannel,
-  serverChannel: AsynchronousServerSocketChannel,
-  connectionCache: TMap[ConnectionId, AsynchronousSocketChannel],
+  serverChannel: JAsynchronousServerSocketChannel,
+  connectionCache: TMap[ConnectionId, JAsynchronousSocketChannel],
   mtu: Int,
   bufferSize: Int,
   tcpReadTimeout: Duration,
@@ -33,20 +42,31 @@ class NetTransport(
 
   override def sendReliably(nodeAddress: NodeAddress, payload: Chunk[Byte]): IO[TransportError, Unit] =
     connectionScope(
-      AsynchronousSocketChannel()
+      createConnection(nodeAddress)
         .zip(ConnectionId.make.toManaged_)
         .mapError(ExceptionWrapper(_))
         .tapM { case (channel, uuid) => connectionCache.put(uuid, channel).commit }
     ).flatMap { case (close, (channel, id)) =>
-      nodeAddress.socketAddress.flatMap(channel.connect(_)) *>
-        channel.writeChunk(payload) *>
-        Buffer
-          .byte(bufferSize)
-          .map(buffer => NetTransport.channelStream(channel, buffer, tcpReadTimeout))
-          .flatMap(byteStream => connectionQueue.offer(NetTransport.Connection(id, close, byteStream)))
+      ZIO.effect {
+        channel.write(ByteBuffer.wrap(payload.toArray))
+        Channels.newInputStream(channel)
+      }.flatMap(stream =>
+        connectionQueue.offer(
+          NetTransport.Connection(id, close, ZManaged.makeEffect(stream)(_.close()).mapError(ExceptionWrapper(_)))
+        )
+      )
     }
       .mapError(ExceptionWrapper(_))
       .unit
+
+  private def createConnection(to: NodeAddress): ZManaged[Any, Throwable, JAsynchronousSocketChannel] =
+    ZManaged
+      .makeEffect(JAsynchronousSocketChannel.open())(_.close())
+      .tapM(channel =>
+        Task.effectAsyncWithCompletionHandler[JVoid](handler =>
+          channel.connect(JInetSocketAddress.createUnresolved(to.hostName, to.port), (), handler)
+        )
+      )
 
   override def sendReliably(connectionId: ConnectionId, payload: Chunk[Byte]): IO[TransportError, Unit] =
     connectionCache
@@ -54,7 +74,7 @@ class NetTransport(
       .commit
       .flatMap {
         case Some(channel) =>
-          channel.writeChunk(payload)
+          ZIO.effect(channel.write(ByteBuffer.wrap(payload.toArray))).mapError(ExceptionWrapper(_))
         case None          =>
           ZIO.fail(ConnectionNotFound(connectionId))
       }
@@ -80,7 +100,7 @@ class NetTransport(
         .either
     )
 
-  override val receiveReliable: UStream[(ConnectionId, Stream[TransportError, Byte])] =
+  override val receiveReliable: UStream[(ConnectionId, ZManaged[Any, TransportError, InputStream])] =
     ZStream.fromQueue(connectionQueue).map(conn => (conn.id, conn.stream))
 }
 
@@ -89,7 +109,7 @@ object NetTransport {
   private case class Connection(
     id: ConnectionId,
     close: ZManaged.Finalizer,
-    stream: Stream[TransportError, Byte]
+    stream: ZManaged[Any, TransportError, InputStream]
   )
 
   val live: ZLayer[Has[MemberlistConfig], TransportError, Has[MemberlistTransport]] =
@@ -100,27 +120,40 @@ object NetTransport {
         datagramChannel <- DatagramChannel
                              .bind(Some(addr))
                              .mapError(BindFailed(addr, _))
-        serverChannel   <- AsynchronousServerSocketChannel()
+        serverChannel   <- ZManaged
+                             .makeEffect(JAsynchronousServerSocketChannel.open())(_.close())
                              .mapError(ExceptionWrapper(_))
                              .tapM { server =>
-                               server.bind(Some(addr)).mapError(BindFailed(addr, _))
+                               ZIO
+                                 .effect(
+                                   server.bind(
+                                     new JInetSocketAddress(config.bindAddress.hostName, config.bindAddress.port)
+                                   )
+                                 )
+                                 .mapError(BindFailed(addr, _))
                              }
-        connectionCache <- TMap.empty[ConnectionId, AsynchronousSocketChannel].commit.toManaged_
+        connectionCache <- TMap.empty[ConnectionId, JAsynchronousSocketChannel].commit.toManaged_
         connectionQueue <- ZQueue.bounded[Connection](100).toManaged(_.shutdown)
         connectionScope <- ZManaged.scope
         _               <- connectionScope(
-                             serverChannel.accept
+                             Managed
+                               .makeInterruptible(
+                                 Task.effectAsyncWithCompletionHandler[JAsynchronousSocketChannel](handler =>
+                                   serverChannel.accept((), handler)
+                                 )
+                               )(channel => ZIO.effect(channel.close()).orDie)
                                .mapError(ExceptionWrapper(_))
                                .zip(ConnectionId.make.toManaged_)
                                .tapM { case (channel, uuid) => connectionCache.put(uuid, channel).commit }
-                               .zip(Buffer.byte(1024 * 1024 * 2).toManaged_)
                                .mapBoth(
                                  ExceptionWrapper(_),
-                                 { case ((channel, uuid), buffer) => (uuid, channelStream(channel, buffer, 5.seconds)) }
+                                 { case (channel, uuid) => (uuid, Channels.newInputStream(channel)) }
                                )
                            ).flatMap { case (close, (id, stream)) =>
-                             connectionQueue.offer(Connection(id, close, stream))
-                           }.forever.fork.toManaged(_.interrupt)
+                             connectionQueue.offer(
+                               Connection(id, close, ZManaged.makeEffect(stream)(_.close).mapError(ExceptionWrapper(_)))
+                             )
+                           }.forever.forkManaged
       } yield new NetTransport(
         config.bindAddress,
         datagramChannel = datagramChannel,
@@ -133,24 +166,4 @@ object NetTransport {
         connectionQueue = connectionQueue
       )
     )
-
-  private def channelStream(channel: AsynchronousSocketChannel, buffer: ByteBuffer, tcpReadTimeout: Duration) =
-    //    to musi byc queue dla kazdego polaczenia i fork ktory robi read i z tego stream
-    ZStream.repeatEffectChunkOption[Any, TransportError, Byte](
-      channel
-        .read(buffer, tcpReadTimeout)
-        .zipLeft(buffer.flip)
-        .mapError(err => Some(ExceptionWrapper(err)))
-        .flatMap(bytes =>
-          if (bytes == -1)
-            ZIO.fail(None)
-          else
-            buffer.getChunk().zipLeft(buffer.clear)
-        )
-        .catchSome {
-          //case Some(ExceptionWrapper(_: InterruptedByTimeoutException)) => ZIO.fail(None)
-          case Some(ExceptionWrapper(_: EOFException)) => ZIO.fail(None)
-        }
-    )
-
 }

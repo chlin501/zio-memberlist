@@ -71,7 +71,7 @@ object TransportError {
       extends TransportError(msg = s"Connection timeout after $timeout.")
 
   final case class BindFailed(addr: SocketAddress, exc: Throwable)
-      extends TransportError(msg = s"Failed binding to address $addr.")
+      extends TransportError(msg = s"Failed binding to address $addr.", exc)
 
   final case class ChannelClosed(socketAddress: SocketAddress)
       extends TransportError(msg = s"Channel to $socketAddress is closed")
