@@ -26,7 +26,5 @@ final case class GossipState(members: Vector[NodeAddress]) {
 object GossipState {
   val Empty: GossipState = GossipState(Vector.empty[NodeAddress])
 
-  implicit val gossipStateRw: ReadWriter[GossipState] = macroRW[GossipState]
-
   final case class StateDiff(local: Vector[NodeAddress], remote: Vector[NodeAddress])
 }

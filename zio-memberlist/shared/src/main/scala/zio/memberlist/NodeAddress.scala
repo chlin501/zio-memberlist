@@ -2,9 +2,11 @@ package zio.memberlist
 
 import upickle.default._
 import zio.memberlist.TransportError._
-import zio.memberlist.encoding.ByteCodec
+import zio.memberlist.encoding.MsgPackCodec
 import zio.nio.core.{InetAddress, InetSocketAddress}
 import zio.{Chunk, IO, UIO}
+
+import java.io.{InputStream, OutputStream}
 
 final case class NodeAddress(hostName: String, port: Int) {
 
@@ -32,9 +34,11 @@ object NodeAddress {
       .map(addr => NodeAddress(addr.hostName, port))
       .orDie
 
-  implicit val nodeAddressRw: ReadWriter[NodeAddress] = macroRW[NodeAddress]
+  implicit val byteCodec: MsgPackCodec[NodeAddress] =
+    new MsgPackCodec[NodeAddress] {
+      override def unsafeDecode(input: InputStream): NodeAddress = ???
 
-  implicit val byteCodec: ByteCodec[NodeAddress] =
-    ByteCodec.fromReadWriter(nodeAddressRw)
+      override def unsafeEncode(a: NodeAddress, output: OutputStream): Unit = ???
+    }
 
 }

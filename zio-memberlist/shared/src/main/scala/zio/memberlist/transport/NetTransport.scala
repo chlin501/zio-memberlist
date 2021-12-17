@@ -4,19 +4,18 @@ import zio.config.getConfig
 import zio.duration._
 import zio.memberlist.TransportError._
 import zio.memberlist.{MemberlistConfig, NodeAddress, TransportError}
-import zio.nio.channels.{AsynchronousServerSocketChannel, AsynchronousSocketChannel, DatagramChannel}
-import zio.nio.core.{Buffer, ByteBuffer, InetSocketAddress}
+import zio.nio.channels.DatagramChannel
+import zio.nio.core.{Buffer, InetSocketAddress}
 import zio.stm.TMap
 import zio.stream.{UStream, ZStream}
 import zio.{Chunk, Has, IO, Managed, Queue, Task, ZIO, ZLayer, ZManaged, ZQueue}
 
-import java.io.{EOFException, InputStream}
+import java.io.InputStream
 import java.lang.{Void => JVoid}
 import java.net.{InetSocketAddress => JInetSocketAddress}
 import java.nio.ByteBuffer
 import java.nio.channels.{
   Channels,
-  InterruptedByTimeoutException,
   AsynchronousServerSocketChannel => JAsynchronousServerSocketChannel,
   AsynchronousSocketChannel => JAsynchronousSocketChannel
 }
@@ -52,7 +51,11 @@ class NetTransport(
         Channels.newInputStream(channel)
       }.flatMap(stream =>
         connectionQueue.offer(
-          NetTransport.Connection(id, close, ZManaged.makeEffect(stream)(_.close()).mapError(ExceptionWrapper(_)))
+          NetTransport.Connection(
+            id = id,
+            close = close,
+            stream = ZManaged.makeEffect(stream)(_.close()).mapError(ExceptionWrapper(_))
+          )
         )
       )
     }
