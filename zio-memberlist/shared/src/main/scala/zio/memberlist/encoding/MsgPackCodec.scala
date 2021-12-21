@@ -8,46 +8,29 @@ import scala.annotation.switch
 import scala.reflect.ClassTag
 
 trait MsgPackCodec[A] { self =>
-//  def fromChunk(chunk: Chunk[Byte]): IO[DeserializationTypeError, A]
   def unsafeDecode(input: InputStream): A
   def unsafeEncode(a: A, output: OutputStream): Unit
 
-//  def toChunk(a: A): IO[SerializationTypeError, Chunk[Byte]]
+  def zip[B](that: MsgPackCodec[B]): MsgPackCodec[(A, B)] = new MsgPackCodec[(A, B)] {
+    override def unsafeDecode(input: InputStream): (A, B) =
+      (self.unsafeDecode(input), that.unsafeDecode(input))
 
-//  def zip[B](that: ByteCodec[B]): ByteCodec[(A, B)] =
-//    ByteCodec.instance { chunk =>
-//      val (sizeChunk, dataChunk) = chunk.splitAt(4)
-//      for {
-//        split  <- byteArrayToInt(sizeChunk.toArray)
-//        first  <- self.fromChunk(dataChunk.take(split))
-//        second <- that.fromChunk(dataChunk.drop(split))
-//      } yield (first, second)
-//    } { case (first, second) =>
-//      self.toChunk(first).zipWith(that.toChunk(second)) { case (firstChunk, secondChunk) =>
-//        val sizeChunk = Chunk.fromArray(intToByteArray(firstChunk.size))
-//        sizeChunk ++ firstChunk ++ secondChunk
-//      }
-//    }
-//
-//  def bimap[B](f: A => B, g: B => A): ByteCodec[B] =
-//    ByteCodec.instance(self.fromChunk(_).map(f))((self.toChunk _).compose(g))
-//
-//  def bimapM[B](f: A => IO[DeserializationTypeError, B], g: B => IO[SerializationTypeError, A]): ByteCodec[B] =
-//    ByteCodec.instance(self.fromChunk(_).flatMap(f))(g(_).flatMap(self.toChunk))
+    override def unsafeEncode(a: (A, B), output: OutputStream): Unit = {
+      self.unsafeEncode(a._1, output)
+      that.unsafeEncode(a._2, output)
+    }
+  }
+
+  def bimap[B](f: A => B, g: B => A): MsgPackCodec[B] = new MsgPackCodec[B] {
+    override def unsafeDecode(input: InputStream): B = f(self.unsafeDecode(input))
+
+    override def unsafeEncode(a: B, output: OutputStream): Unit = self.unsafeEncode(g(a), output)
+  }
 
   private[MsgPackCodec] def unsafeWiden[A1](implicit ev: A1 <:< A): MsgPackCodec[A1] =
     new MsgPackCodec[A1] {
 
-//      override def fromChunk(chunk: Chunk[Byte]): IO[DeserializationTypeError, A1] =
-//        self.fromChunk(chunk)
-//
-//      override def toChunk(a1: A1): IO[SerializationTypeError, Chunk[Byte]] =
-//        a1 match {
-//          case a: A => self.toChunk(a)
-//          case _    => IO.fail(SerializationTypeError(s"Unsupported type ${a1.getClass}"))
-//        }
-
-      override def unsafeDecode(input: InputStream): A1 = ???
+      override def unsafeDecode(input: InputStream): A1 = self.unsafeDecode(input).asInstanceOf[A1]
 
       override def unsafeEncode(a1: A1, output: OutputStream): Unit =
         self.unsafeEncode(ev(a1), output)
@@ -361,15 +344,6 @@ object MsgPackCodec {
   def apply[A](implicit ev: MsgPackCodec[A]): MsgPackCodec[A] =
     ev
 
-//  def instance[A](
-//    f: Chunk[Byte] => IO[DeserializationTypeError, A]
-//  )(g: A => IO[SerializationTypeError, Chunk[Byte]]): ByteCodec[A] =
-//    new ByteCodec[A] {
-//      override def fromChunk(chunk: Chunk[Byte]): IO[DeserializationTypeError, A] = f(chunk)
-//
-//      override def toChunk(a: A): IO[SerializationTypeError, Chunk[Byte]] = g(a)
-//    }
-
   def tagged[A]: TaggedBuilder[A] =
     new TaggedBuilder[A]()
 
@@ -405,18 +379,20 @@ object MsgPackCodec {
     }
   }
 
-  private def writeUInt8(i: Int, outputStream: OutputStream) = outputStream.write(i.toByte)
-  private def writeUInt16(i: Int, outputStream: OutputStream) = {
+  private def writeUInt8(i: Int, outputStream: OutputStream): Unit =
+    outputStream.write(i.toByte)
+
+  private def writeUInt16(i: Int, outputStream: OutputStream): Unit = {
     outputStream.write(((i >> 8) & 0xff).toByte)
     outputStream.write(((i >> 0) & 0xff).toByte)
   }
-  private def writeUInt32(i: Int, outputStream: OutputStream) = {
+  private def writeUInt32(i: Int, outputStream: OutputStream): Unit = {
     outputStream.write(((i >> 24) & 0xff).toByte)
     outputStream.write(((i >> 16) & 0xff).toByte)
     outputStream.write(((i >> 8) & 0xff).toByte)
     outputStream.write(((i >> 0) & 0xff).toByte)
   }
-  private def writeUInt64(i: Long, outputStream: OutputStream) = {
+  private def writeUInt64(i: Long, outputStream: OutputStream): Unit = {
     outputStream.write(((i >> 56) & 0xff).toByte)
     outputStream.write(((i >> 48) & 0xff).toByte)
     outputStream.write(((i >> 40) & 0xff).toByte)
@@ -427,30 +403,65 @@ object MsgPackCodec {
     outputStream.write(((i >> 0) & 0xff).toByte)
   }
 
-  def parseUInt8(inputStream: InputStream)  =
+  def parseUInt8(inputStream: InputStream): Int =
     inputStream.read() & 0xff
-  def parseUInt16(inputStream: InputStream) =
+
+  def parseUInt16(inputStream: InputStream): Int =
     (inputStream.read() & 0xff) << 8 | inputStream.read() & 0xff
-  def parseUInt32(inputStream: InputStream) =
+
+  def parseUInt32(inputStream: InputStream): Int =
     (inputStream.read() & 0xff) << 24 | (inputStream.read() & 0xff) << 16 |
       (inputStream.read() & 0xff) << 8 | inputStream.read() & 0xff
-  def parseUInt64(inputStream: InputStream) =
+
+  def parseUInt64(inputStream: InputStream): Long =
     (inputStream.read().toLong & 0xff) << 56 | (inputStream.read().toLong & 0xff) << 48 |
       (inputStream.read().toLong & 0xff) << 40 | (inputStream.read().toLong & 0xff) << 32 |
       (inputStream.read().toLong & 0xff) << 24 | (inputStream.read().toLong & 0xff) << 16 |
       (inputStream.read().toLong & 0xff) << 8 | (inputStream.read().toLong & 0xff) << 0
 
-  implicit val string = new MsgPackCodec[String] {
-    override def unsafeDecode(input: InputStream): String = {
-      val n     = input.read()
-      val bytes = (n & 0xff: @switch) match {
-        case MsgPackKeys.Str8  => input.readNBytes(parseUInt8(input))
+  //FIXME I don't think that this is correct way of handle that but thia
+  implicit val byteArray = new MsgPackCodec[Array[Byte]] {
+    override def unsafeDecode(input: InputStream): Array[Byte] = {
+      val n = input.read()
+      (n & 0xff: @switch) match {
+        case MsgPackKeys.Nil   => null
+        case MsgPackKeys.Str8  =>
+          input.readNBytes(parseUInt8(input))
         case MsgPackKeys.Str16 => input.readNBytes(parseUInt16(input))
         case MsgPackKeys.Str32 => input.readNBytes(parseUInt32(input))
         case x                 => input.readNBytes(x & 0x1f)
       }
-      new String(bytes, java.nio.charset.StandardCharsets.UTF_8)
+    }
 
+    override def unsafeEncode(s: Array[Byte], output: OutputStream): Unit = {
+      val length = s.length
+      if (length <= 31) {
+        output.write((MsgPackKeys.FixStrMask | length).toByte)
+      } else if (length <= 255) {
+        output.write(MsgPackKeys.Str8.toByte)
+        writeUInt8(length, output)
+      } else if (length <= 65535) {
+        output.write(MsgPackKeys.Str16.toByte)
+        writeUInt16(length, output)
+      } else {
+        output.write(MsgPackKeys.Str32.toByte)
+        writeUInt32(length, output)
+      }
+      output.write(s)
+    }
+  }
+
+  implicit val string = new MsgPackCodec[String] {
+    override def unsafeDecode(input: InputStream): String = {
+      val n = input.read()
+      (n & 0xff: @switch) match {
+        case MsgPackKeys.Nil   => null
+        case MsgPackKeys.Str8  =>
+          new String(input.readNBytes(parseUInt8(input)), java.nio.charset.StandardCharsets.UTF_8)
+        case MsgPackKeys.Str16 => new String(input.readNBytes(parseUInt16(input)))
+        case MsgPackKeys.Str32 => new String(input.readNBytes(parseUInt32(input)))
+        case x                 => new String(input.readNBytes(x & 0x1f))
+      }
     }
 
     override def unsafeEncode(s: String, output: OutputStream): Unit = {
@@ -472,17 +483,17 @@ object MsgPackCodec {
     }
   }
 
-  implicit def option[A](implicit codec1: MsgPackCodec[A]) = new MsgPackCodec[Option[A]] {
-    override def unsafeDecode(input: InputStream): Option[A] = {
-      val n = input.read()
-      (n & 0xff: @switch) match {
-        case MsgPackKeys.Nil => None
-        case x               => input.readNBytes(x & 0x1f)
-      }
-    }
-
-    override def unsafeEncode(a: Option[A], output: OutputStream): Unit = ???
-  }
+//  implicit def option[A](implicit codec1: MsgPackCodec[A]) = new MsgPackCodec[Option[A]] {
+//    override def unsafeDecode(input: InputStream): Option[A] = {
+//      val n = input.read()
+//      (n & 0xff: @switch) match {
+//        case MsgPackKeys.Nil => None
+//        case x               => input.readNBytes(x & 0x1f)
+//      }
+//    }
+//
+//    override def unsafeEncode(a: Option[A], output: OutputStream): Unit = ???
+//  }
 
   implicit def map3[A1, A2, A3](implicit
     codec1: MsgPackCodec[A1],
@@ -575,67 +586,4 @@ object MsgPackCodec {
         }
       }
   }
-
-//  def decode[A: MsgPackCodec](input: InputStream): IO[DeserializationTypeError, A] = {
-//    ZIO.effect(MsgPackCodec[A].unsafeDecode(input)).mapError(DeserializationTypeError(_))
-//  }
-//
-//  def encode[A: MsgPackCodec](a: A): IO[SerializationTypeError, Chunk[Byte]] =
-//    MsgPackCodec[A].toChunk(a)
-
-//  implicit val byteCodec: ByteCodec[Byte] =
-//    instance { chunk =>
-//      val size = chunk.length
-//      if (size == 1) ZIO.succeed(chunk.headOption.get)
-//      else ZIO.fail(DeserializationTypeError(s"Expected chunk of length 1; got $size"))
-//    } { elem =>
-//      ZIO.succeed(Chunk.single(elem))
-//    }
-//
-//  implicit val intCodec: ByteCodec[Int] =
-//    instance { chunk =>
-//      byteArrayToInt(chunk.toArray)
-//    } { value =>
-//      ZIO.succeed(Chunk.fromArray(intToByteArray(value)))
-//    }
-//
-//  implicit val stringCodec: ByteCodec[String] =
-//    instance { chunk =>
-//      ZIO.effect {
-//        new String(chunk.toArray, StandardCharsets.UTF_8)
-//      }.mapError(DeserializationTypeError(_))
-//    } { value =>
-//      ZIO.succeed(Chunk.fromArray(value.getBytes(StandardCharsets.UTF_8)))
-//    }
-//
-//  implicit val uuidCodec: ByteCodec[UUID] =
-//    stringCodec.bimapM(
-//      str => ZIO.effect(UUID.fromString(str)).mapError(DeserializationTypeError(_)),
-//      uuid => ZIO.succeed(uuid.toString)
-//    )
-//
-//  implicit def tupleCodec[A: ByteCodec, B: ByteCodec]: ByteCodec[(A, B)] =
-//    ByteCodec[A].zip(ByteCodec[B])
-//
-//  implicit def chunkCodec[A: ByteCodec]: ByteCodec[Chunk[A]] =
-//    instance { chunk =>
-//      def go(remaining: Chunk[Byte], acc: List[A]): IO[DeserializationTypeError, Chunk[A]] =
-//        if (remaining.isEmpty) ZIO.succeed(Chunk.fromIterable(acc))
-//        else {
-//          val (sizeChunk, dataChunk) = remaining.splitAt(4)
-//          byteArrayToInt(sizeChunk.toArray).flatMap { elementSize =>
-//            ByteCodec[A].fromChunk(dataChunk.take(elementSize)).flatMap { nextA =>
-//              go(dataChunk.drop(elementSize), nextA :: acc)
-//            }
-//          }
-//        }
-//      go(chunk, Nil)
-//    } { data =>
-//      data.foldM(Chunk.empty: Chunk[Byte]) { case (acc, next) =>
-//        ByteCodec[A].toChunk(next).map { chunk =>
-//          val sizeChunk = Chunk.fromArray(intToByteArray(chunk.size))
-//          sizeChunk ++ chunk ++ acc
-//        }
-//      }
-//    }
 }
