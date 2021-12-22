@@ -18,11 +18,17 @@ trait MemberlistTransport {
 
   val receiveBestEffort: UStream[Either[TransportError, (NodeAddress, Chunk[Byte])]]
 
-  val receiveReliable: UStream[(ConnectionId, ZManaged[Any, TransportError, InputStream])]
+  val receiveReliable: UStream[MemberlistTransport.Connection]
 
 }
 
 object MemberlistTransport {
+
+  case class Connection(
+    id: ConnectionId,
+    close: ZManaged.Finalizer,
+    stream: InputStream
+  )
 
   def sendBestEffort(
     nodeAddress: NodeAddress,
@@ -46,8 +52,7 @@ object MemberlistTransport {
     : ZStream[Has[MemberlistTransport], Nothing, Either[TransportError, (NodeAddress, Chunk[Byte])]] =
     ZStream.accessStream(_.get.receiveBestEffort)
 
-  val receiveReliable
-    : ZStream[Has[MemberlistTransport], Nothing, (ConnectionId, ZManaged[Any, TransportError, InputStream])] =
+  val receiveReliable: ZStream[Has[MemberlistTransport], Nothing, Connection] =
     ZStream.accessStream(_.get.receiveReliable)
 
 }

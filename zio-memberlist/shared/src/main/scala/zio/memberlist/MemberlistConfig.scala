@@ -4,7 +4,9 @@ import zio.config.ConfigDescriptor._
 import zio.config.{ConfigDescriptor, ReadError, ZConfig}
 import zio.duration.{Duration, _}
 import zio.memberlist.state.NodeName
-import zio.{Has, ZLayer}
+import zio.{Chunk, Has, ZLayer}
+
+import java.net.InetAddress
 
 case class MemberlistConfig(
   name: NodeName,
@@ -26,8 +28,8 @@ object MemberlistConfig {
       string("ADDRESS")
         .default("0.0.0.0")
         .zip(int("PORT").default(5557))[NodeAddress](
-          { case (addr, port) => NodeAddress(addr, port) },
-          address => Some((address.hostName, address.port))
+          { case (addr, port) => NodeAddress(Chunk.fromArray(InetAddress.getByName(addr).getAddress), port) },
+          address => Some((InetAddress.getByAddress(address.addr.toArray).getHostName, address.port))
         ) |@|
       zioDuration("PROTOCOL_INTERVAL").default(1.second) |@|
       zioDuration("PROTOCOL_TIMEOUT").default(500.milliseconds) |@|

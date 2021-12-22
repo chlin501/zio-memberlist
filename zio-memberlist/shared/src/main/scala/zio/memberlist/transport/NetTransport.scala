@@ -3,7 +3,7 @@ import zio.ZManaged.Scope
 import zio.config.getConfig
 import zio.duration._
 import zio.memberlist.TransportError._
-import zio.memberlist.{MemberlistConfig, NodeAddress, TransportError}
+import zio.memberlist.{MemberlistConfig, NodeAddress, TransportError, transport}
 import zio.nio.channels.DatagramChannel
 import zio.nio.core.{Buffer, InetSocketAddress}
 import zio.stm.TMap
@@ -12,7 +12,7 @@ import zio.{Chunk, Has, IO, Managed, Queue, Task, ZIO, ZLayer, ZManaged, ZQueue}
 
 import java.io.InputStream
 import java.lang.{Void => JVoid}
-import java.net.{InetSocketAddress => JInetSocketAddress}
+import java.net.{InetAddress => JInetAddress, InetSocketAddress => JInetSocketAddress}
 import java.nio.ByteBuffer
 import java.nio.channels.{
   Channels,
@@ -29,7 +29,7 @@ class NetTransport(
   bufferSize: Int,
   tcpReadTimeout: Duration,
   connectionScope: Scope,
-  connectionQueue: Queue[NetTransport.Connection]
+  connectionQueue: Queue[transport.MemberlistTransport.Connection]
 ) extends MemberlistTransport {
 
   override def sendBestEffort(nodeAddress: NodeAddress, payload: Chunk[Byte]): IO[TransportError, Unit] =
@@ -51,10 +51,10 @@ class NetTransport(
         Channels.newInputStream(channel)
       }.flatMap(stream =>
         connectionQueue.offer(
-          NetTransport.Connection(
+          transport.MemberlistTransport.Connection(
             id = id,
             close = close,
-            stream = ZManaged.makeEffect(stream)(_.close()).mapError(ExceptionWrapper(_))
+            stream = stream
           )
         )
       )
@@ -67,7 +67,7 @@ class NetTransport(
       .makeEffect(JAsynchronousSocketChannel.open())(_.close())
       .tapM(channel =>
         Task.effectAsyncWithCompletionHandler[JVoid](handler =>
-          channel.connect(JInetSocketAddress.createUnresolved(to.hostName, to.port), (), handler)
+          channel.connect(new JInetSocketAddress(JInetAddress.getByAddress(to.addr.toArray), to.port), (), handler)
         )
       )
 
@@ -103,17 +103,11 @@ class NetTransport(
         .either
     )
 
-  override val receiveReliable: UStream[(ConnectionId, ZManaged[Any, TransportError, InputStream])] =
-    ZStream.fromQueue(connectionQueue).map(conn => (conn.id, conn.stream))
+  override val receiveReliable: UStream[transport.MemberlistTransport.Connection] =
+    ZStream.fromQueue(connectionQueue)
 }
 
 object NetTransport {
-
-  private case class Connection(
-    id: ConnectionId,
-    close: ZManaged.Finalizer,
-    stream: ZManaged[Any, TransportError, InputStream]
-  )
 
   val live: ZLayer[Has[MemberlistConfig], TransportError, Has[MemberlistTransport]] =
     ZLayer.fromManaged(
@@ -130,13 +124,16 @@ object NetTransport {
                                ZIO
                                  .effect(
                                    server.bind(
-                                     new JInetSocketAddress(config.bindAddress.hostName, config.bindAddress.port)
+                                     new JInetSocketAddress(
+                                       JInetAddress.getByAddress(config.bindAddress.addr.toArray),
+                                       config.bindAddress.port
+                                     )
                                    )
                                  )
                                  .mapError(BindFailed(addr, _))
                              }
         connectionCache <- TMap.empty[ConnectionId, JAsynchronousSocketChannel].commit.toManaged_
-        connectionQueue <- ZQueue.bounded[Connection](100).toManaged(_.shutdown)
+        connectionQueue <- ZQueue.bounded[transport.MemberlistTransport.Connection](100).toManaged(_.shutdown)
         connectionScope <- ZManaged.scope
         _               <- connectionScope(
                              Managed
@@ -154,7 +151,11 @@ object NetTransport {
                                )
                            ).flatMap { case (close, (id, stream)) =>
                              connectionQueue.offer(
-                               Connection(id, close, ZManaged.makeEffect(stream)(_.close).mapError(ExceptionWrapper(_)))
+                               transport.MemberlistTransport.Connection(
+                                 id,
+                                 close,
+                                 stream
+                               )
                              )
                            }.forever.forkManaged
       } yield new NetTransport(

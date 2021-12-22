@@ -1,22 +1,20 @@
 package zio.memberlist
 
-import upickle.default._
-import zio.memberlist.TransportError._
-import zio.memberlist.encoding.MsgPackCodec
+import zio.memberlist.TransportError.ExceptionWrapper
 import zio.nio.core.{InetAddress, InetSocketAddress}
 import zio.{Chunk, IO, UIO}
 
-import java.io.{InputStream, OutputStream}
+import java.net.{InetAddress => JInetAddress}
 
-final case class NodeAddress(hostName: String, port: Int) {
+final case class NodeAddress(addr: Chunk[Byte], port: Int) {
 
   def socketAddress: IO[TransportError, InetSocketAddress] =
     (for {
-      addr <- InetAddress.byName(hostName)
+      addr <- InetAddress.byAddress(addr)
       sa   <- InetSocketAddress.inetAddress(addr, port)
     } yield sa).mapError(ExceptionWrapper(_))
 
-  override def toString: String = hostName + ": " + port
+  override def toString: String = JInetAddress.getByAddress(addr.toArray) + ": " + port
 }
 
 object NodeAddress {
@@ -25,20 +23,13 @@ object NodeAddress {
     addr.hostString.flatMap(host =>
       InetAddress
         .byName(host)
-        .map(inet => NodeAddress(inet.hostName, addr.port))
+        .map(inet => NodeAddress(inet.address, addr.port))
         .orDie
     )
 
   def local(port: Int): UIO[NodeAddress] =
     InetAddress.localHost
-      .map(addr => NodeAddress(addr.hostName, port))
+      .map(addr => NodeAddress(addr.address, port))
       .orDie
-
-  implicit val byteCodec: MsgPackCodec[NodeAddress] =
-    new MsgPackCodec[NodeAddress] {
-      override def unsafeDecode(input: InputStream): NodeAddress = ???
-
-      override def unsafeEncode(a: NodeAddress, output: OutputStream): Unit = ???
-    }
 
 }
