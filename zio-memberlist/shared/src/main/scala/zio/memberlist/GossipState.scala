@@ -1,6 +1,5 @@
 package zio.memberlist
 
-import upickle.default._
 import zio.memberlist.GossipState.StateDiff
 
 final case class GossipState(members: Vector[NodeAddress]) {

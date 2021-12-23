@@ -83,33 +83,33 @@ object messages {
     implicit val nodeViewSnapshotCodec =
       MsgPackCodec[
         (
-          (String, Array[Byte]),
+          (String, Chunk[Byte]),
           (String, Int),
-          (String, Array[Byte]),
+          (String, Chunk[Byte]),
           (String, String),
           (String, Int),
           (String, NodeState),
-          (String, Array[Byte])
+          (String, Chunk[Byte])
         )
       ].bimap(
         { case ((_, addr), (_, incarnation), (_, meta), (_, name), (_, port), (_, state), (_, vst)) =>
           NodeViewSnapshot(
             NodeName(name),
-            NodeAddress(Chunk.fromArray(addr), port),
-            Option(meta).map(Chunk.fromArray),
+            NodeAddress(addr, port),
+            Option(meta),
             incarnation,
             state
           )
         },
         (view: NodeViewSnapshot) =>
           (
-            ("Addr", view.nodeAddress.addr.toArray),
+            ("Addr", view.nodeAddress.addr),
             ("Incarnation", view.incarnation.toInt),
-            ("Meta", view.meta.getOrElse(Chunk.empty).toArray),
+            ("Meta", view.meta.orNull),
             ("Name", view.name.name),
             ("Port", view.nodeAddress.port),
             ("State", view.state),
-            ("Vst", Chunk[Byte](1, 5, 6, 0, 0).toArray)
+            ("Vst", Chunk[Byte](1, 5, 4, 0, 0, 0))
           )
       )
 
@@ -125,7 +125,12 @@ object messages {
         PushPull(Chunk.fromIterable(nodes), join)
       }
 
-      override def unsafeEncode(a: PushPull, output: OutputStream): Unit = ???
+      override def unsafeEncode(a: PushPull, output: OutputStream): Unit = {
+        MsgPackCodec[((String, Boolean), (String, Int), (String, Int))]
+          .unsafeEncode((("Join", a.join), ("Nodes", a.nodes.size), ("UserStateLen", 0)), output)
+
+        a.nodes.map(view => MsgPackCodec[NodeViewSnapshot].unsafeEncode(view, output))
+      }
     }
 
   }
@@ -135,9 +140,16 @@ object messages {
   object User {}
 
   final case class Compound(
-    parts: List[Chunk[Byte]]
+    parts: Chunk[Chunk[Byte]]
   ) extends MemberlistMessage
 
-  object Compound {}
+  object Compound {
+
+    implicit val codec = new MsgPackCodec[Compound] {
+      override def unsafeDecode(input: InputStream): Compound = ???
+
+      override def unsafeEncode(a: Compound, output: OutputStream): Unit = ???
+    }
+  }
 
 }

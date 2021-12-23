@@ -2,14 +2,28 @@ package zio.memberlist.encoding
 
 import upack.MsgPackKeys
 import zio.memberlist.SerializationError.{DeserializationTypeError, SerializationTypeError}
+import zio.{Chunk, IO, ZIO}
 
-import java.io.{InputStream, OutputStream}
+import java.io.{ByteArrayInputStream, ByteArrayOutputStream, InputStream, OutputStream}
 import scala.annotation.switch
 import scala.reflect.ClassTag
 
 trait MsgPackCodec[A] { self =>
   def unsafeDecode(input: InputStream): A
+
+  final def decode(input: InputStream): IO[DeserializationTypeError, A] =
+    ZIO.effect(unsafeDecode(input)).mapError(DeserializationTypeError(_))
+
+  final def decode(input: Chunk[Byte]): IO[DeserializationTypeError, A] =
+    ZIO.effect(unsafeDecode(new ByteArrayInputStream(input.toArray))).mapError(DeserializationTypeError(_))
+
   def unsafeEncode(a: A, output: OutputStream): Unit
+
+  final def encode(a: A): IO[SerializationTypeError, Chunk[Byte]] = ZIO.effect {
+    val out = new ByteArrayOutputStream()
+    unsafeEncode(a, out)
+    Chunk.fromArray(out.toByteArray)
+  }.mapError(SerializationTypeError(_))
 
   def zip[B](that: MsgPackCodec[B]): MsgPackCodec[(A, B)] = new MsgPackCodec[(A, B)] {
     override def unsafeDecode(input: InputStream): (A, B) =
@@ -420,35 +434,39 @@ object MsgPackCodec {
       (inputStream.read().toLong & 0xff) << 8 | (inputStream.read().toLong & 0xff) << 0
 
   //FIXME I don't think that this is correct way of handle that but this is how go implementation is doing this
-  implicit val byteArray = new MsgPackCodec[Array[Byte]] {
-    override def unsafeDecode(input: InputStream): Array[Byte] = {
+  implicit val byteArray = new MsgPackCodec[Chunk[Byte]] {
+    override def unsafeDecode(input: InputStream): Chunk[Byte] = {
       val n = input.read()
       (n & 0xff: @switch) match {
         case MsgPackKeys.Nil   => null
         case MsgPackKeys.Str8  =>
-          input.readNBytes(parseUInt8(input))
-        case MsgPackKeys.Str16 => input.readNBytes(parseUInt16(input))
-        case MsgPackKeys.Str32 => input.readNBytes(parseUInt32(input))
-        case x                 => input.readNBytes(x & 0x1f)
+          Chunk.fromArray(input.readNBytes(parseUInt8(input)))
+        case MsgPackKeys.Str16 => Chunk.fromArray(input.readNBytes(parseUInt16(input)))
+        case MsgPackKeys.Str32 => Chunk.fromArray(input.readNBytes(parseUInt32(input)))
+        case x                 => Chunk.fromArray(input.readNBytes(x & 0x1f))
       }
     }
 
-    override def unsafeEncode(s: Array[Byte], output: OutputStream): Unit = {
-      val length = s.length
-      if (length <= 31) {
-        output.write((MsgPackKeys.FixStrMask | length).toByte)
-      } else if (length <= 255) {
-        output.write(MsgPackKeys.Str8.toByte)
-        writeUInt8(length, output)
-      } else if (length <= 65535) {
-        output.write(MsgPackKeys.Str16.toByte)
-        writeUInt16(length, output)
+    override def unsafeEncode(s: Chunk[Byte], output: OutputStream): Unit =
+      if (s == null) {
+        output.write(MsgPackKeys.Nil)
       } else {
-        output.write(MsgPackKeys.Str32.toByte)
-        writeUInt32(length, output)
+        val length = s.length
+        if (length <= 31) {
+          output.write((MsgPackKeys.FixStrMask | length).toByte)
+        } else if (length <= 255) {
+          output.write(MsgPackKeys.Str8.toByte)
+          writeUInt8(length, output)
+        } else if (length <= 65535) {
+          output.write(MsgPackKeys.Str16.toByte)
+          writeUInt16(length, output)
+        } else {
+          output.write(MsgPackKeys.Str32.toByte)
+          writeUInt32(length, output)
+        }
+        output.write(s.toArray)
       }
-      output.write(s)
-    }
+
   }
 
   implicit val string = new MsgPackCodec[String] {
@@ -464,23 +482,26 @@ object MsgPackCodec {
       }
     }
 
-    override def unsafeEncode(s: String, output: OutputStream): Unit = {
-      val strBytes = s.getBytes(java.nio.charset.StandardCharsets.UTF_8)
-      val length   = strBytes.length
-      if (length <= 31) {
-        output.write((MsgPackKeys.FixStrMask | length).toByte)
-      } else if (length <= 255) {
-        output.write(MsgPackKeys.Str8.toByte)
-        writeUInt8(length, output)
-      } else if (length <= 65535) {
-        output.write(MsgPackKeys.Str16.toByte)
-        writeUInt16(length, output)
+    override def unsafeEncode(s: String, output: OutputStream): Unit =
+      if (s == null) {
+        output.write(MsgPackKeys.Nil)
       } else {
-        output.write(MsgPackKeys.Str32.toByte)
-        writeUInt32(length, output)
+        val strBytes = s.getBytes(java.nio.charset.StandardCharsets.UTF_8)
+        val length   = strBytes.length
+        if (length <= 31) {
+          output.write((MsgPackKeys.FixStrMask | length).toByte)
+        } else if (length <= 255) {
+          output.write(MsgPackKeys.Str8.toByte)
+          writeUInt8(length, output)
+        } else if (length <= 65535) {
+          output.write(MsgPackKeys.Str16.toByte)
+          writeUInt16(length, output)
+        } else {
+          output.write(MsgPackKeys.Str32.toByte)
+          writeUInt32(length, output)
+        }
+        output.write(strBytes)
       }
-      output.write(strBytes)
-    }
   }
 
 //  implicit def option[A](implicit codec1: MsgPackCodec[A]) = new MsgPackCodec[Option[A]] {
@@ -494,6 +515,28 @@ object MsgPackCodec {
 //
 //    override def unsafeEncode(a: Option[A], output: OutputStream): Unit = ???
 //  }
+
+  implicit def map1[A1](implicit
+    codec1: MsgPackCodec[A1],
+    stringCodec: MsgPackCodec[String]
+  ) =
+    new MsgPackCodec[(String, A1)] {
+      override def unsafeDecode(input: InputStream): (String, A1) = {
+        val n = input.read()
+        if (n == (MsgPackKeys.FixMapMask | 1)) {
+          stringCodec.unsafeDecode(input) -> codec1.unsafeDecode(input)
+        } else {
+          throw new DeserializationTypeError("incorrect marker for Fix Map of 3 " + n.toHexString)
+        }
+      }
+
+      override def unsafeEncode(a: (String, A1), output: OutputStream): Unit = {
+        output.write(MsgPackKeys.FixMapMask | 1)
+        stringCodec.unsafeEncode(a._1, output)
+        codec1.unsafeEncode(a._2, output)
+      }
+
+    }
 
   implicit def map3[A1, A2, A3](implicit
     codec1: MsgPackCodec[A1],
@@ -572,11 +615,11 @@ object MsgPackCodec {
         codec3.unsafeEncode(a._3._2, output)
         stringCodec.unsafeEncode(a._4._1, output)
         codec4.unsafeEncode(a._4._2, output)
-        stringCodec.unsafeEncode(a._4._1, output)
+        stringCodec.unsafeEncode(a._5._1, output)
         codec5.unsafeEncode(a._5._2, output)
-        stringCodec.unsafeEncode(a._4._1, output)
+        stringCodec.unsafeEncode(a._6._1, output)
         codec6.unsafeEncode(a._6._2, output)
-        stringCodec.unsafeEncode(a._4._1, output)
+        stringCodec.unsafeEncode(a._7._1, output)
         codec7.unsafeEncode(a._7._2, output)
       }
 

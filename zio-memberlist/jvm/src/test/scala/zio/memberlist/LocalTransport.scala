@@ -5,7 +5,6 @@ import zio.memberlist.encoding.MsgPackCodec
 import zio.memberlist.protocols.messages.Initial.{NodeViewSnapshot, PushPull}
 import zio.memberlist.state.{NodeName, NodeState}
 import zio.memberlist.transport.{MemberlistTransport, NetTransport}
-import zio.stream.{Transducer, ZStream}
 import zio.{Chunk, Has, Layer, ZIO, ZLayer}
 
 import java.net.InetAddress
@@ -36,18 +35,6 @@ class LocalTransport(port: Int) extends zio.App {
 //      putStrLn(new String(chunk.toArray))
 //    }.runCollect.forever
 
-  case class PushPullHeader(Nodes: Int, UserStateLen: Int, Join: Boolean)
-
-  case class PushNodeState(
-    Name: String,
-    Addr: String,
-    Port: Int,
-    Meta: String,
-    Incarnation: Long,
-    State: Int,
-    Vsn: String
-  )
-
   val program = {
     for {
       _ <- MemberlistTransport.receiveReliable
@@ -58,23 +45,32 @@ class LocalTransport(port: Int) extends zio.App {
                  MsgPackCodec[PushPull].unsafeDecode(conn.stream)
 
                  //s"fixmap: ${InetAddress.getByAddress(addr)}, $incarnation, $meta, $name, $port, $state, $vst"
-               }.flatMap(msg => putStrLn("" + conn.id + " aaa " + msg))
+               }.zipLeft {
+
+                 MsgPackCodec[PushPull]
+                   .encode(
+                     PushPull(
+                       nodes = Chunk.single(
+                         NodeViewSnapshot(
+                           name = NodeName("local_node_" + port),
+                           nodeAddress =
+                             NodeAddress(Chunk.fromArray(InetAddress.getByName("localhost").getAddress), port),
+                           meta = None,
+                           incarnation = 1,
+                           state = NodeState.Alive
+                         )
+                       ),
+                       join = true
+                     )
+                   )
+                   .flatMap(payload => MemberlistTransport.sendReliably(conn.id, payload.prepended(6)))
+               }
+                 .flatMap(msg => putStrLn("" + conn.id + " aaa " + msg))
              }
              .runCollect
 
     } yield ()
   }
-
-  val s = ZStream.repeatEffectChunkOption {
-    ZIO.succeed(Chunk.fromArray("1111".getBytes()))
-  }
-
-  val program1 = s
-    .transduce(Transducer.fromPush {
-      case Some(chunk) => putStrLn(new String(chunk.toArray)).as(Chunk.empty)
-      case None        => putStrLn("end").as(Chunk.empty)
-    })
-    .runCollect
 
   override def run(args: List[String]) =
     program.provideCustomLayer(dependencies).exitCode
