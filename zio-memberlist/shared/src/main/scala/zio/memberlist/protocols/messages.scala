@@ -92,7 +92,7 @@ object messages {
           (String, Chunk[Byte])
         )
       ].bimap(
-        { case ((_, addr), (_, incarnation), (_, meta), (_, name), (_, port), (_, state), (_, vst)) =>
+        { case ((_, addr), (_, incarnation), (_, meta), (_, name), (_, port), (_, state), (_, vsn)) =>
           NodeViewSnapshot(
             NodeName(name),
             NodeAddress(addr, port),
@@ -109,7 +109,7 @@ object messages {
             ("Name", view.name.name),
             ("Port", view.nodeAddress.port),
             ("State", view.state),
-            ("Vst", Chunk[Byte](1, 5, 4, 0, 0, 0))
+            ("Vsn", Chunk[Byte](1, 5, 4, 0, 0, 0))
           )
       )
 
@@ -129,7 +129,7 @@ object messages {
         MsgPackCodec[((String, Boolean), (String, Int), (String, Int))]
           .unsafeEncode((("Join", a.join), ("Nodes", a.nodes.size), ("UserStateLen", 0)), output)
 
-        a.nodes.map(view => MsgPackCodec[NodeViewSnapshot].unsafeEncode(view, output))
+        a.nodes.foreach(view => MsgPackCodec[NodeViewSnapshot].unsafeEncode(view, output))
       }
     }
 

@@ -41,13 +41,13 @@ trait MsgPackCodec[A] { self =>
     override def unsafeEncode(a: B, output: OutputStream): Unit = self.unsafeEncode(g(a), output)
   }
 
-  private[MsgPackCodec] def unsafeWiden[A1](implicit ev: A1 <:< A): MsgPackCodec[A1] =
+  private[MsgPackCodec] def unsafeWiden[A1](implicit ev: A <:< A1): MsgPackCodec[A1] =
     new MsgPackCodec[A1] {
 
       override def unsafeDecode(input: InputStream): A1 = self.unsafeDecode(input).asInstanceOf[A1]
 
       override def unsafeEncode(a1: A1, output: OutputStream): Unit =
-        self.unsafeEncode(ev(a1), output)
+        self.unsafeEncode(a1.asInstanceOf[A], output)
     }
 }
 
@@ -55,7 +55,7 @@ object MsgPackCodec {
 
   final class TaggedBuilder[A] {
 
-    def apply[A1 <: A: MsgPackCodec: ClassTag](implicit ev: A <:< A1): MsgPackCodec[A] =
+    def apply[A1: MsgPackCodec: ClassTag](implicit ev: A1 <:< A): MsgPackCodec[A] =
       taggedInstance[A](
         { case _: A1 =>
           0
@@ -65,9 +65,9 @@ object MsgPackCodec {
         }
       )
 
-    def apply[A1 <: A: MsgPackCodec: ClassTag, A2 <: A: MsgPackCodec: ClassTag](implicit
-      ev1: A <:< A1,
-      ev2: A <:< A2
+    def apply[A1: MsgPackCodec: ClassTag, A2: MsgPackCodec: ClassTag](implicit
+      ev1: A1 <:< A,
+      ev2: A2 <:< A
     ): MsgPackCodec[A] =
       taggedInstance[A](
         {
@@ -84,7 +84,7 @@ object MsgPackCodec {
       A1 <: A: MsgPackCodec: ClassTag,
       A2 <: A: MsgPackCodec: ClassTag,
       A3 <: A: MsgPackCodec: ClassTag
-    ](implicit ev1: A <:< A1, ev2: A <:< A2, ev3: A <:< A3): MsgPackCodec[A] =
+    ](implicit ev1: A1 <:< A, ev2: A2 <:< A, ev3: A3 <:< A): MsgPackCodec[A] =
       taggedInstance[A](
         {
           case _: A1 => 0
@@ -99,11 +99,11 @@ object MsgPackCodec {
       )
 
     def apply[
-      A1 <: A: MsgPackCodec: ClassTag,
-      A2 <: A: MsgPackCodec: ClassTag,
-      A3 <: A: MsgPackCodec: ClassTag,
-      A4 <: A: MsgPackCodec: ClassTag
-    ](implicit ev1: A <:< A1, ev2: A <:< A2, ev3: A <:< A3, ev4: A <:< A4): MsgPackCodec[A] =
+      A1: MsgPackCodec: ClassTag,
+      A2: MsgPackCodec: ClassTag,
+      A3: MsgPackCodec: ClassTag,
+      A4: MsgPackCodec: ClassTag
+    ](implicit ev1: A1 <:< A, ev2: A2 <:< A, ev3: A3 <:< A, ev4: A4 <:< A): MsgPackCodec[A] =
       taggedInstance[A](
         {
           case _: A1 => 0
@@ -120,12 +120,12 @@ object MsgPackCodec {
       )
 
     def apply[
-      A1 <: A: MsgPackCodec: ClassTag,
-      A2 <: A: MsgPackCodec: ClassTag,
-      A3 <: A: MsgPackCodec: ClassTag,
-      A4 <: A: MsgPackCodec: ClassTag,
-      A5 <: A: MsgPackCodec: ClassTag
-    ](implicit ev1: A <:< A1, ev2: A <:< A2, ev3: A <:< A3, ev4: A <:< A4, ev5: A <:< A5): MsgPackCodec[A] =
+      A1: MsgPackCodec: ClassTag,
+      A2: MsgPackCodec: ClassTag,
+      A3: MsgPackCodec: ClassTag,
+      A4: MsgPackCodec: ClassTag,
+      A5: MsgPackCodec: ClassTag
+    ](implicit ev1: A1 <:< A, ev2: A2 <:< A, ev3: A3 <:< A, ev4: A5 <:< A, ev5: A4 <:< A): MsgPackCodec[A] =
       taggedInstance[A](
         {
           case _: A1 => 0
@@ -144,19 +144,19 @@ object MsgPackCodec {
       )
 
     def apply[
-      A1 <: A: MsgPackCodec: ClassTag,
-      A2 <: A: MsgPackCodec: ClassTag,
-      A3 <: A: MsgPackCodec: ClassTag,
-      A4 <: A: MsgPackCodec: ClassTag,
-      A5 <: A: MsgPackCodec: ClassTag,
-      A6 <: A: MsgPackCodec: ClassTag
+      A1: MsgPackCodec: ClassTag,
+      A2: MsgPackCodec: ClassTag,
+      A3: MsgPackCodec: ClassTag,
+      A4: MsgPackCodec: ClassTag,
+      A5: MsgPackCodec: ClassTag,
+      A6: MsgPackCodec: ClassTag
     ](implicit
-      ev1: A <:< A1,
-      ev2: A <:< A2,
-      ev3: A <:< A3,
-      ev4: A <:< A4,
-      ev5: A <:< A5,
-      ev6: A <:< A6
+      ev1: A1 <:< A,
+      ev2: A2 <:< A,
+      ev3: A3 <:< A,
+      ev4: A5 <:< A,
+      ev5: A4 <:< A,
+      ev6: A6 <:< A
     ): MsgPackCodec[A] =
       taggedInstance[A](
         {
@@ -178,21 +178,21 @@ object MsgPackCodec {
       )
 
     def apply[
-      A1 <: A: MsgPackCodec: ClassTag,
-      A2 <: A: MsgPackCodec: ClassTag,
-      A3 <: A: MsgPackCodec: ClassTag,
-      A4 <: A: MsgPackCodec: ClassTag,
-      A5 <: A: MsgPackCodec: ClassTag,
-      A6 <: A: MsgPackCodec: ClassTag,
-      A7 <: A: MsgPackCodec: ClassTag
+      A1: MsgPackCodec: ClassTag,
+      A2: MsgPackCodec: ClassTag,
+      A3: MsgPackCodec: ClassTag,
+      A4: MsgPackCodec: ClassTag,
+      A5: MsgPackCodec: ClassTag,
+      A6: MsgPackCodec: ClassTag,
+      A7: MsgPackCodec: ClassTag
     ](implicit
-      ev1: A <:< A1,
-      ev2: A <:< A2,
-      ev3: A <:< A3,
-      ev4: A <:< A4,
-      ev5: A <:< A5,
-      ev6: A <:< A6,
-      ev7: A <:< A7
+      ev1: A1 <:< A,
+      ev2: A2 <:< A,
+      ev3: A3 <:< A,
+      ev4: A5 <:< A,
+      ev5: A4 <:< A,
+      ev6: A6 <:< A,
+      ev7: A7 <:< A
     ): MsgPackCodec[A] =
       taggedInstance[A](
         {
@@ -216,23 +216,23 @@ object MsgPackCodec {
       )
 
     def apply[
-      A1 <: A: MsgPackCodec: ClassTag,
-      A2 <: A: MsgPackCodec: ClassTag,
-      A3 <: A: MsgPackCodec: ClassTag,
-      A4 <: A: MsgPackCodec: ClassTag,
-      A5 <: A: MsgPackCodec: ClassTag,
-      A6 <: A: MsgPackCodec: ClassTag,
-      A7 <: A: MsgPackCodec: ClassTag,
-      A8 <: A: MsgPackCodec: ClassTag
+      A1: MsgPackCodec: ClassTag,
+      A2: MsgPackCodec: ClassTag,
+      A3: MsgPackCodec: ClassTag,
+      A4: MsgPackCodec: ClassTag,
+      A5: MsgPackCodec: ClassTag,
+      A6: MsgPackCodec: ClassTag,
+      A7: MsgPackCodec: ClassTag,
+      A8: MsgPackCodec: ClassTag
     ](implicit
-      ev1: A <:< A1,
-      ev2: A <:< A2,
-      ev3: A <:< A3,
-      ev4: A <:< A4,
-      ev5: A <:< A5,
-      ev6: A <:< A6,
-      ev7: A <:< A7,
-      ev8: A <:< A8
+      ev1: A1 <:< A,
+      ev2: A2 <:< A,
+      ev3: A3 <:< A,
+      ev4: A5 <:< A,
+      ev5: A4 <:< A,
+      ev6: A6 <:< A,
+      ev7: A7 <:< A,
+      ev8: A8 <:< A
     ): MsgPackCodec[A] =
       taggedInstance[A](
         {
@@ -258,25 +258,25 @@ object MsgPackCodec {
       )
 
     def apply[
-      A1 <: A: MsgPackCodec: ClassTag,
-      A2 <: A: MsgPackCodec: ClassTag,
-      A3 <: A: MsgPackCodec: ClassTag,
-      A4 <: A: MsgPackCodec: ClassTag,
-      A5 <: A: MsgPackCodec: ClassTag,
-      A6 <: A: MsgPackCodec: ClassTag,
-      A7 <: A: MsgPackCodec: ClassTag,
-      A8 <: A: MsgPackCodec: ClassTag,
-      A9 <: A: MsgPackCodec: ClassTag
+      A1: MsgPackCodec: ClassTag,
+      A2: MsgPackCodec: ClassTag,
+      A3: MsgPackCodec: ClassTag,
+      A4: MsgPackCodec: ClassTag,
+      A5: MsgPackCodec: ClassTag,
+      A6: MsgPackCodec: ClassTag,
+      A7: MsgPackCodec: ClassTag,
+      A8: MsgPackCodec: ClassTag,
+      A9: MsgPackCodec: ClassTag
     ](implicit
-      ev1: A <:< A1,
-      ev2: A <:< A2,
-      ev3: A <:< A3,
-      ev4: A <:< A4,
-      ev5: A <:< A5,
-      ev6: A <:< A6,
-      ev7: A <:< A7,
-      ev8: A <:< A8,
-      ev9: A <:< A9
+      ev1: A1 <:< A,
+      ev2: A2 <:< A,
+      ev3: A3 <:< A,
+      ev4: A5 <:< A,
+      ev5: A4 <:< A,
+      ev6: A6 <:< A,
+      ev7: A7 <:< A,
+      ev8: A8 <:< A,
+      ev9: A9 <:< A
     ): MsgPackCodec[A] =
       taggedInstance[A](
         {
@@ -304,27 +304,27 @@ object MsgPackCodec {
       )
 
     def apply[
-      A1 <: A: MsgPackCodec: ClassTag,
-      A2 <: A: MsgPackCodec: ClassTag,
-      A3 <: A: MsgPackCodec: ClassTag,
-      A4 <: A: MsgPackCodec: ClassTag,
-      A5 <: A: MsgPackCodec: ClassTag,
-      A6 <: A: MsgPackCodec: ClassTag,
-      A7 <: A: MsgPackCodec: ClassTag,
-      A8 <: A: MsgPackCodec: ClassTag,
-      A9 <: A: MsgPackCodec: ClassTag,
-      A10 <: A: MsgPackCodec: ClassTag
+      A1: MsgPackCodec: ClassTag,
+      A2: MsgPackCodec: ClassTag,
+      A3: MsgPackCodec: ClassTag,
+      A4: MsgPackCodec: ClassTag,
+      A5: MsgPackCodec: ClassTag,
+      A6: MsgPackCodec: ClassTag,
+      A7: MsgPackCodec: ClassTag,
+      A8: MsgPackCodec: ClassTag,
+      A9: MsgPackCodec: ClassTag,
+      A10: MsgPackCodec: ClassTag
     ](implicit
-      ev1: A <:< A1,
-      ev2: A <:< A2,
-      ev3: A <:< A3,
-      ev4: A <:< A4,
-      ev5: A <:< A5,
-      ev6: A <:< A6,
-      ev7: A <:< A7,
-      ev8: A <:< A8,
-      ev9: A <:< A9,
-      ev10: A <:< A10
+      ev1: A1 <:< A,
+      ev2: A2 <:< A,
+      ev3: A3 <:< A,
+      ev4: A5 <:< A,
+      ev5: A4 <:< A,
+      ev6: A6 <:< A,
+      ev7: A7 <:< A,
+      ev8: A8 <:< A,
+      ev9: A9 <:< A,
+      ev10: A10 <:< A
     ): MsgPackCodec[A] =
       taggedInstance[A](
         {
@@ -388,33 +388,34 @@ object MsgPackCodec {
         if (tag == -1) throw SerializationTypeError("Cannot find tag for: " + a.getClass.getName)
         val codec = codecFor(tag)
         if (codec == null) throw SerializationTypeError("Cannot find codec for: " + tag)
+        output.write(tag.toInt)
         codec.unsafeEncode(a, output)
       }
     }
   }
 
   private def writeUInt8(i: Int, outputStream: OutputStream): Unit =
-    outputStream.write(i.toByte)
+    outputStream.write(i)
 
   private def writeUInt16(i: Int, outputStream: OutputStream): Unit = {
-    outputStream.write(((i >> 8) & 0xff).toByte)
-    outputStream.write(((i >> 0) & 0xff).toByte)
+    outputStream.write(((i >> 8) & 0xff))
+    outputStream.write(((i >> 0) & 0xff))
   }
   private def writeUInt32(i: Int, outputStream: OutputStream): Unit = {
-    outputStream.write(((i >> 24) & 0xff).toByte)
-    outputStream.write(((i >> 16) & 0xff).toByte)
-    outputStream.write(((i >> 8) & 0xff).toByte)
-    outputStream.write(((i >> 0) & 0xff).toByte)
+    outputStream.write(((i >> 24) & 0xff))
+    outputStream.write(((i >> 16) & 0xff))
+    outputStream.write(((i >> 8) & 0xff))
+    outputStream.write(((i >> 0) & 0xff))
   }
   private def writeUInt64(i: Long, outputStream: OutputStream): Unit = {
-    outputStream.write(((i >> 56) & 0xff).toByte)
-    outputStream.write(((i >> 48) & 0xff).toByte)
-    outputStream.write(((i >> 40) & 0xff).toByte)
-    outputStream.write(((i >> 32) & 0xff).toByte)
-    outputStream.write(((i >> 24) & 0xff).toByte)
-    outputStream.write(((i >> 16) & 0xff).toByte)
-    outputStream.write(((i >> 8) & 0xff).toByte)
-    outputStream.write(((i >> 0) & 0xff).toByte)
+    outputStream.write(((i >> 56) & 0xff).toInt)
+    outputStream.write(((i >> 48) & 0xff).toInt)
+    outputStream.write(((i >> 40) & 0xff).toInt)
+    outputStream.write(((i >> 32) & 0xff).toInt)
+    outputStream.write(((i >> 24) & 0xff).toInt)
+    outputStream.write(((i >> 16) & 0xff).toInt)
+    outputStream.write(((i >> 8) & 0xff).toInt)
+    outputStream.write(((i >> 0) & 0xff).toInt)
   }
 
   def parseUInt8(inputStream: InputStream): Int =
@@ -453,15 +454,15 @@ object MsgPackCodec {
       } else {
         val length = s.length
         if (length <= 31) {
-          output.write((MsgPackKeys.FixStrMask | length).toByte)
+          output.write((MsgPackKeys.FixStrMask | length))
         } else if (length <= 255) {
-          output.write(MsgPackKeys.Str8.toByte)
+          output.write(MsgPackKeys.Str8)
           writeUInt8(length, output)
         } else if (length <= 65535) {
-          output.write(MsgPackKeys.Str16.toByte)
+          output.write(MsgPackKeys.Str16)
           writeUInt16(length, output)
         } else {
-          output.write(MsgPackKeys.Str32.toByte)
+          output.write(MsgPackKeys.Str32)
           writeUInt32(length, output)
         }
         output.write(s.toArray)
@@ -489,15 +490,15 @@ object MsgPackCodec {
         val strBytes = s.getBytes(java.nio.charset.StandardCharsets.UTF_8)
         val length   = strBytes.length
         if (length <= 31) {
-          output.write((MsgPackKeys.FixStrMask | length).toByte)
+          output.write((MsgPackKeys.FixStrMask | length))
         } else if (length <= 255) {
-          output.write(MsgPackKeys.Str8.toByte)
+          output.write(MsgPackKeys.Str8)
           writeUInt8(length, output)
         } else if (length <= 65535) {
-          output.write(MsgPackKeys.Str16.toByte)
+          output.write(MsgPackKeys.Str16)
           writeUInt16(length, output)
         } else {
-          output.write(MsgPackKeys.Str32.toByte)
+          output.write(MsgPackKeys.Str32)
           writeUInt32(length, output)
         }
         output.write(strBytes)
@@ -658,28 +659,28 @@ object MsgPackCodec {
       if (i >= 0) {
         if (i <= 127) output.write(i)
         else if (i <= 255) {
-          output.write(MsgPackKeys.UInt8.toByte)
-          output.write(i.toByte)
+          output.write(MsgPackKeys.UInt8)
+          output.write(i)
         } else if (i <= Short.MaxValue) {
-          output.write(MsgPackKeys.Int16.toByte)
+          output.write(MsgPackKeys.Int16)
           writeUInt16(i, output)
         } else if (i <= 0xffff) {
-          output.write(MsgPackKeys.UInt16.toByte)
+          output.write(MsgPackKeys.UInt16)
           writeUInt16(i, output)
         } else {
-          output.write(MsgPackKeys.Int32.toByte)
+          output.write(MsgPackKeys.Int32)
           writeUInt32(i, output)
         }
       } else {
         if (i >= -32) output.write(i | 0xe0)
         else if (i >= -128) {
-          output.write(MsgPackKeys.Int8.toByte)
-          output.write(i.toByte)
+          output.write(MsgPackKeys.Int8)
+          output.write(i)
         } else if (i >= Short.MinValue) {
-          output.write(MsgPackKeys.Int16.toByte)
+          output.write(MsgPackKeys.Int16)
           writeUInt16(i, output)
         } else {
-          output.write(MsgPackKeys.Int32.toByte)
+          output.write(MsgPackKeys.Int32)
           writeUInt32(i, output)
         }
       }

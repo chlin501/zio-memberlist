@@ -88,3 +88,12 @@ object SwimError {
   final case class SuspicionTimeoutAlreadyStarted(node: NodeName)
       extends Error(s"Suspicion timeout for node: $node already started")
 }
+
+object ProtocolError {
+  final case class UnhandledBestEffortMessage(node: NodeAddress, message: Any)
+      extends Error(s"Unhandled message [$message] from node: $node")
+
+  final case class UnhandledReliableMessage(connectionId: ConnectionId, message: Any)
+      extends Error(s"Unhandled message [$message] from connection: $connectionId")
+
+}

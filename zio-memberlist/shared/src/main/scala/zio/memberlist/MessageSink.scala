@@ -1,25 +1,25 @@
 package zio.memberlist
 
 import zio.clock.Clock
-import zio.logging.{Logging, log}
+import zio.logging.Logger
 import zio.memberlist.encoding.MsgPackCodec
 import zio.memberlist.protocols.messages.Compound
-import zio.memberlist.state.{NodeName, Nodes}
+import zio.memberlist.state.Nodes
 import zio.memberlist.transport.MemberlistTransport
-import zio.stream.Take
-import zio.{Chunk, Fiber, Has, ZIO}
+import zio.{Chunk, Fiber, IO, UIO, ZIO, ZLayer}
 
 final class MessageSink(
-  local: NodeName,
-  localAddress: NodeAddress,
   broadcast: Broadcast,
-  transport: MemberlistTransport
+  transport: MemberlistTransport,
+  nodes: Nodes,
+  clock: Clock.Service,
+  logger: Logger[String]
 ) {
 
   /**
    * Sends message to target.
    */
-  def send(msg: Message[Chunk[Byte]]): ZIO[Clock with Logging with Has[Nodes], Error, Unit] =
+  def send(msg: Message[Chunk[Byte]]): IO[Error, Unit] =
     msg match {
       case Message.NoResponse                                => ZIO.unit
       case Message.BestEffortByName(nodeName, message)       =>
@@ -27,7 +27,7 @@ final class MessageSink(
           broadcast    <- broadcast.broadcast(message.size)
           withPiggyback = Compound(Chunk.fromIterable(message :: broadcast))
           chunk        <- MsgPackCodec[Compound].encode(withPiggyback)
-          nodeAddress  <- Nodes.nodeAddress(nodeName).commit
+          nodeAddress  <- nodes.nodeAddress(nodeName).commit
           _            <- transport.sendBestEffort(nodeAddress, chunk)
         } yield ()
       case Message.BestEffortByAddress(nodeAddress, message) =>
@@ -35,6 +35,12 @@ final class MessageSink(
           chunk <- MsgPackCodec[Compound].encode(Compound(Chunk.single(message)))
           _     <- transport.sendBestEffort(nodeAddress, chunk)
         } yield ()
+      case Message.ReliableByConnection(id, chunk)           =>
+        transport.sendReliably(id, chunk)
+      case Message.ReliableByAddress(nodeAddress, chunk)     =>
+        transport.sendReliably(nodeAddress, chunk)
+      case Message.ReliableByName(nodeName, chunk)           =>
+        nodes.nodeAddress(nodeName).commit.flatMap(transport.sendReliably(_, chunk))
       case msg: Message.Batch[Chunk[Byte] @unchecked]        =>
         val (broadcast, rest) =
           (msg.first :: msg.second :: msg.rest.toList).partition(_.isInstanceOf[Message.Broadcast[_]])
@@ -43,35 +49,26 @@ final class MessageSink(
       case msg @ Message.Broadcast(_)                        =>
         broadcast.add(msg.asInstanceOf[Message.Broadcast[Chunk[Byte]]])
       case Message.WithTimeout(message, action, timeout)     =>
-        send(message) *> action.delay(timeout).flatMap(send).unit
+        send(message) *> clock.sleep(timeout) *> action.flatMap(send).unit
     }
-
-  private def processTake(
-    take: Take[Error, Message[Chunk[Byte]]]
-  ): ZIO[Clock with Logging with Has[Nodes], Nothing, Unit] =
-    take.foldM(
-      ZIO.unit,
-      log.error("error: ", _),
-      ZIO.foreach_(_)(send(_).catchAll(e => log.throwable("error during send", e)))
-    )
 
   def process(
     protocol: Protocol[Chunk[Byte]]
-  ): ZIO[Clock with Logging with Has[Nodes], Nothing, Fiber.Runtime[Nothing, Unit]] =
+  ): UIO[Fiber.Runtime[Nothing, Unit]] =
     transport.receiveBestEffort
       .mapMPar(10) {
         case Left(err)  =>
-          log.throwable("error during processing messages.", err)
+          logger.throwable("error during processing messages.", err)
         case Right(msg) =>
           //TODO handle error here properly
-          protocol.onMessage.tupled(msg).either
+          protocol.onBestEffortMessage.tupled(msg).either
       }
       .runDrain
       .fork *>
       protocol.produceMessages.either
         .mapMPar(10) {
-          case Left(err)  => log.throwable("error during processing messages.", err)
-          case Right(msg) => send(msg).catchAll(err => log.throwable("error during send message.", err))
+          case Left(err)  => logger.throwable("error during processing messages.", err)
+          case Right(msg) => send(msg).catchAll(err => logger.throwable("error during send message.", err))
         }
         .runDrain
         .fork
@@ -79,17 +76,16 @@ final class MessageSink(
 
 object MessageSink {
 
-  def apply(
-    local: NodeName,
-    nodeAddress: NodeAddress,
-    broadcast: Broadcast,
-    transport: MemberlistTransport
-  ): MessageSink =
-    new MessageSink(
-      local,
-      nodeAddress,
-      broadcast,
-      transport
+  val live =
+    ZLayer.fromServices[Broadcast, MemberlistTransport, Logger[String], Clock.Service, Nodes, MessageSink](
+      (broadcast, transport, logger, clock, nodes) =>
+        new MessageSink(
+          broadcast,
+          transport,
+          nodes,
+          clock,
+          logger
+        )
     )
 
 }

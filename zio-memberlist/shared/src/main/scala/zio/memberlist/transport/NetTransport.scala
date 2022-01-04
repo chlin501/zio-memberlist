@@ -1,7 +1,6 @@
 package zio.memberlist.transport
 import zio.ZManaged.Scope
 import zio.config.getConfig
-import zio.duration._
 import zio.memberlist.TransportError._
 import zio.memberlist.{MemberlistConfig, NodeAddress, TransportError, transport}
 import zio.nio.channels.DatagramChannel
@@ -10,7 +9,6 @@ import zio.stm.TMap
 import zio.stream.{UStream, ZStream}
 import zio.{Chunk, Has, IO, Managed, Queue, Task, ZIO, ZLayer, ZManaged, ZQueue}
 
-import java.io.InputStream
 import java.lang.{Void => JVoid}
 import java.net.{InetAddress => JInetAddress, InetSocketAddress => JInetSocketAddress}
 import java.nio.ByteBuffer
@@ -23,11 +21,8 @@ import java.nio.channels.{
 class NetTransport(
   override val bindAddress: NodeAddress,
   datagramChannel: DatagramChannel,
-  serverChannel: JAsynchronousServerSocketChannel,
   connectionCache: TMap[ConnectionId, JAsynchronousSocketChannel],
   mtu: Int,
-  bufferSize: Int,
-  tcpReadTimeout: Duration,
   connectionScope: Scope,
   connectionQueue: Queue[transport.MemberlistTransport.Connection]
 ) extends MemberlistTransport {
@@ -161,11 +156,8 @@ object NetTransport {
       } yield new NetTransport(
         config.bindAddress,
         datagramChannel = datagramChannel,
-        serverChannel = serverChannel,
         connectionCache = connectionCache,
         mtu = config.messageSizeLimit,
-        bufferSize = 1024 * 1024 * 2,
-        tcpReadTimeout = 5.seconds,
         connectionScope = connectionScope,
         connectionQueue = connectionQueue
       )

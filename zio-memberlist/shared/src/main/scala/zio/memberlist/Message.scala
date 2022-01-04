@@ -3,6 +3,7 @@ package zio.memberlist
 import zio.duration.Duration
 import zio.memberlist.Message._
 import zio.memberlist.state.NodeName
+import zio.memberlist.transport.ConnectionId
 import zio.stm.ZSTM
 import zio.{Has, IO, UIO, ZIO}
 
@@ -11,27 +12,29 @@ sealed trait Message[+A] {
 
   final def transformM[B](fn: A => IO[Error, B]): IO[Error, Message[B]] =
     self match {
-      case msg: Message.BestEffortByName[A @unchecked]    =>
+      case msg: Message.BestEffortByName[A @unchecked]     =>
         fn(msg.message).map(b => msg.copy(message = b))
-      case msg: Message.BestEffortByAddress[A @unchecked] =>
+      case msg: Message.BestEffortByAddress[A @unchecked]  =>
         fn(msg.message).map(b => msg.copy(message = b))
-      case msg: Message.ReliableByName[A @unchecked]      =>
+      case msg: Message.ReliableByName[A @unchecked]       =>
         fn(msg.message).map(b => msg.copy(message = b))
-      case msg: Message.ReliableByAddress[A @unchecked]   =>
+      case msg: Message.ReliableByAddress[A @unchecked]    =>
         fn(msg.message).map(b => msg.copy(message = b))
-      case msg: Message.Broadcast[A @unchecked]           =>
+      case msg: Message.Broadcast[A @unchecked]            =>
         fn(msg.message).map(b => msg.copy(message = b))
-      case msg: Message.Batch[A @unchecked]               =>
+      case msg: Message.Batch[A @unchecked]                =>
         for {
           m1   <- msg.first.transformM(fn)
           m2   <- msg.second.transformM(fn)
           rest <- ZIO.foreach(msg.rest.toSeq)(_.transformM(fn))
         } yield Message.Batch(m1, m2, rest: _*)
-      case msg: WithTimeout[A @unchecked]                 =>
+      case msg: WithTimeout[A @unchecked]                  =>
         msg.message
           .transformM(fn)
           .map(b => msg.copy(message = b, action = msg.action.flatMap(_.transformM(fn))))
-      case NoResponse                                     =>
+      case msg: Message.ReliableByConnection[A @unchecked] =>
+        fn(msg.message).map(b => msg.copy(message = b))
+      case NoResponse                                      =>
         Message.noResponse
     }
 }
@@ -44,7 +47,7 @@ object Message {
 
   final case class ReliableByAddress[A](node: NodeAddress, message: A) extends Message[A]
 
-  final case class ReliableByConnection[A](node: NodeAddress, message: A) extends Message[A]
+  final case class ReliableByConnection[A](connectionId: ConnectionId, message: A) extends Message[A]
 
   final case class ReliableByName[A](node: NodeName, message: A) extends Message[A]
 

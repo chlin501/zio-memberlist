@@ -1,8 +1,8 @@
 package zio.memberlist.transport
 
-import zio.{Chunk, Has, IO, ZIO, ZManaged}
 import zio.memberlist.{NodeAddress, TransportError}
-import zio.stream.{Stream, UStream, ZStream}
+import zio.stream.{UStream, ZStream}
+import zio.{Chunk, Has, IO, ZIO, ZManaged}
 
 import java.io.InputStream
 

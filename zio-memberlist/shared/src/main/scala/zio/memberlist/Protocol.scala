@@ -1,11 +1,11 @@
 package zio.memberlist
 
-import zio.logging._
 import zio.memberlist.encoding.MsgPackCodec
-import zio.stream.{ZStream, _}
+import zio.memberlist.transport.ConnectionId
+import zio.stream._
 import zio.{Chunk, IO, ZIO}
 
-import scala.reflect.{ClassTag, classTag}
+import scala.reflect.ClassTag
 
 /**
  * Protocol represents message flow.
@@ -21,69 +21,96 @@ trait Protocol[M] {
    * @return - Protocol that operates on Chunk[Byte]
    */
   final def binary(implicit codec: MsgPackCodec[M]): Protocol[Chunk[Byte]] =
-    new Protocol[Chunk[Byte]] {
+    transform(MsgPackCodec[M].encode, MsgPackCodec[M].decode)
 
-      override val onMessage: (NodeAddress, Chunk[Byte]) => IO[Error, Message[Chunk[Byte]]] =
+  final def transform[M1](to: M => IO[Error, M1], from: M1 => IO[Error, M]): Protocol[M1] =
+    new Protocol[M1] {
+
+      override val onBestEffortMessage: (NodeAddress, M1) => IO[Error, Message[M1]] =
         (addr, msg) =>
-          MsgPackCodec[M]
-            .decode(msg)
-            .flatMap(decoded => self.onMessage(addr, decoded))
-            .flatMap(_.transformM(MsgPackCodec[M].encode))
+          from(msg)
+            .flatMap(decoded => self.onBestEffortMessage(addr, decoded))
+            .flatMap(_.transformM(to))
 
-      override val produceMessages: Stream[Error, Message[Chunk[Byte]]] =
-        self.produceMessages.mapM(_.transformM(MsgPackCodec[M].encode))
-    }
+      override val produceMessages: Stream[Error, Message[M1]] =
+        self.produceMessages.mapM(_.transformM(to))
 
-  /**
-   * Adds logging to each received and sent message.
-   */
-  val debug: ZIO[Logging, Error, Protocol[M]] =
-    ZIO.access[Logging] { env =>
-      new Protocol[M] {
-        override def onMessage: (NodeAddress, M) => IO[Error, Message[M]] =
-          (addr, msg) =>
-            env.get.log(LogLevel.Trace)("Receive [" + msg + "]") *>
-              self
-                .onMessage(addr, msg)
-                .tap(msg => env.get.log(LogLevel.Trace)("Replied with [" + msg + "]"))
-
-        override val produceMessages: Stream[Error, Message[M]] =
-          self.produceMessages.tap { msg =>
-            env.get.log(LogLevel.Trace)("Sending [" + msg + "]")
-          }
-      }
+      /**
+       * Handler for incomming messages.
+       */
+      override def onReliableMessage: (ConnectionId, M1) => IO[Error, Message[M1]] = (id, msg) =>
+        from(msg)
+          .flatMap(decoded => self.onReliableMessage(id, decoded))
+          .flatMap(_.transformM(to))
     }
 
   /**
    * Handler for incomming messages.
    */
-  def onMessage: (NodeAddress, M) => IO[Error, Message[M]]
+  def onBestEffortMessage: (NodeAddress, M) => IO[Error, Message[M]]
+
+  /**
+   * Handler for incomming messages.
+   */
+  def onReliableMessage: (ConnectionId, M) => IO[Error, Message[M]]
 
   /**
    * Stream of outgoing messages.
    */
-  val produceMessages: zio.stream.Stream[Error, Message[M]]
+  val produceMessages: Stream[Error, Message[M]]
 
 }
 
 object Protocol {
 
   final class ProtocolComposePartiallyApplied[A] {
+    def apply[A1 <: A: ClassTag, A2 <: A: ClassTag](
+      a1: Protocol[A1],
+      a2: Protocol[A2]
+    ) = new Protocol[A] {
+
+      override val onBestEffortMessage: (NodeAddress, A) => IO[Error, Message[A]] = {
+        case (nodeAddress, message: A1) =>
+          a1.onBestEffortMessage(nodeAddress, message)
+        case (nodeAddress, message: A2) =>
+          a2.onBestEffortMessage(nodeAddress, message)
+        case (nodeAddress, msg)         =>
+          ZIO.fail(ProtocolError.UnhandledBestEffortMessage(nodeAddress, msg))
+      }
+
+      override val produceMessages: Stream[Error, Message[A]] = {
+        val allStreams: List[Stream[Error, Message[A]]] =
+          a1.asInstanceOf[Protocol[A]].produceMessages :: a2
+            .asInstanceOf[Protocol[A]]
+            .produceMessages :: Nil
+
+        ZStream.mergeAllUnbounded()(allStreams: _*)
+      }
+
+      /**
+       * Handler for incomming messages.
+       */
+      override def onReliableMessage: (ConnectionId, A) => IO[Error, Message[A]] = {
+        case (connectionId, message: A1) => a1.onReliableMessage(connectionId, message)
+        case (connectionId, message: A2) => a2.onReliableMessage(connectionId, message)
+        case (connectionId, message)     => ZIO.fail(ProtocolError.UnhandledReliableMessage(connectionId, message))
+      }
+    }
     def apply[A1 <: A: ClassTag, A2 <: A: ClassTag, A3 <: A: ClassTag](
       a1: Protocol[A1],
       a2: Protocol[A2],
       a3: Protocol[A3]
     ) = new Protocol[A] {
 
-      override val onMessage: (NodeAddress, A) => IO[Error, Message[A]] = {
-        case msg: (NodeAddress @unchecked, A1 @unchecked) if classTag[A1].runtimeClass.isInstance(msg) =>
-          a1.onMessage.tupled(msg)
-        case msg: (NodeAddress @unchecked, A2 @unchecked) if classTag[A2].runtimeClass.isInstance(msg) =>
-          a2.onMessage.tupled(msg)
-        case msg: (NodeAddress @unchecked, A3 @unchecked) if classTag[A3].runtimeClass.isInstance(msg) =>
-          a3.onMessage.tupled(msg)
-        case _                                                                                         =>
-          Message.noResponse
+      override val onBestEffortMessage: (NodeAddress, A) => IO[Error, Message[A]] = {
+        case (nodeAddress, message: A1) =>
+          a1.onBestEffortMessage(nodeAddress, message)
+        case (nodeAddress, message: A2) =>
+          a2.onBestEffortMessage(nodeAddress, message)
+        case (nodeAddress, message: A3) =>
+          a3.onBestEffortMessage(nodeAddress, message)
+        case (nodeAddress, msg)         =>
+          ZIO.fail(ProtocolError.UnhandledBestEffortMessage(nodeAddress, msg))
 
       }
 
@@ -96,6 +123,15 @@ object Protocol {
         ZStream.mergeAllUnbounded()(allStreams: _*)
       }
 
+      /**
+       * Handler for incomming messages.
+       */
+      override def onReliableMessage: (ConnectionId, A) => IO[Error, Message[A]] = {
+        case (connectionId, message: A1) => a1.onReliableMessage(connectionId, message)
+        case (connectionId, message: A2) => a2.onReliableMessage(connectionId, message)
+        case (connectionId, message: A3) => a3.onReliableMessage(connectionId, message)
+        case (connectionId, message)     => ZIO.fail(ProtocolError.UnhandledReliableMessage(connectionId, message))
+      }
     }
   }
 
@@ -103,18 +139,25 @@ object Protocol {
 
   class ProtocolBuilder[M] {
 
-    def make[R, R1](
-      in: (NodeAddress, M) => ZIO[R, Error, Message[M]],
+    def make[R, R1, R2](
+      bestEffort: (NodeAddress, M) => ZIO[R, Error, Message[M]],
+      reliable: (ConnectionId, M) => ZIO[R2, Error, Message[M]],
       out: zio.stream.ZStream[R1, Error, Message[M]]
-    ): ZIO[R with R1, Error, Protocol[M]] =
-      ZIO.access[R with R1](env =>
+    ): ZIO[R with R1 with R2, Error, Protocol[M]] =
+      ZIO.access[R with R1 with R2](env =>
         new Protocol[M] {
 
-          override val onMessage: (NodeAddress, M) => IO[Error, Message[M]] =
-            (addr, msg) => in(addr, msg).provide(env)
+          override val onBestEffortMessage: (NodeAddress, M) => IO[Error, Message[M]] =
+            (addr, msg) => bestEffort(addr, msg).provide(env)
 
           override val produceMessages: Stream[Error, Message[M]] =
             out.provide(env)
+
+          /**
+           * Handler for incomming messages.
+           */
+          override def onReliableMessage: (ConnectionId, M) => IO[Error, Message[M]] =
+            (id, msg) => reliable(id, msg).provide(env)
         }
       )
   }
