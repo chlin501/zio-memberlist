@@ -2,6 +2,7 @@ package zio.memberlist.protocols
 
 import zio.Chunk
 import zio.memberlist.NodeAddress
+import zio.memberlist.SerializationError.DeserializationTypeError
 import zio.memberlist.encoding.MsgPackCodec
 import zio.memberlist.state.{NodeName, NodeState}
 
@@ -30,10 +31,13 @@ object messages {
   object FailureDetection {
 
     final case class Ping(
-      seqNo: Long
+      seqNo: Long,
+      targetNode: NodeName,
+      sourceAddress: NodeAddress,
+      sourceNode: NodeName
     ) extends FailureDetection
 
-    final case class Ack(seqNo: Long) extends FailureDetection
+    final case class Ack(seqNo: Long, payload: Chunk[Byte]) extends FailureDetection
 
     final case class Nack(seqNo: Long) extends FailureDetection
 
@@ -45,14 +49,44 @@ object messages {
 
     final case class Dead(incarnation: Long, from: NodeName, nodeId: NodeName) extends FailureDetection
 
-//    implicit val ackCodec: MsgPackCodec[Ack] =
-//      MsgPackCodec.fromReadWriter(macroRW[Ack])
+    implicit val ackCodec: MsgPackCodec[Ack] =
+      MsgPackCodec[
+        (
+          (String, Chunk[Byte]),
+          (String, Int)
+        )
+      ].bimap(
+        { case ((_, paylod), (_, seqNo)) =>
+          Ack(seqNo, paylod)
+        },
+        (msg: Ack) => (("Payload", msg.payload), ("SeqNo", msg.seqNo.toInt))
+      )
 //
 //    implicit val nackCodec: MsgPackCodec[Nack] =
 //      MsgPackCodec.fromReadWriter(macroRW[Nack])
 
-//    implicit val pingCodec: MsgPackCodec[Ping] =
-//      MsgPackCodec.fromReadWriter(macroRW[Ping])
+    implicit val pingCodec: MsgPackCodec[Ping] =
+      MsgPackCodec[
+        (
+          (String, String),
+          (String, Int),
+          (String, Chunk[Byte]),
+          (String, String),
+          (String, Int)
+        )
+      ].bimap(
+        { case ((_, nodeName), (_, seqNo), (_, sourceAddr), (_, sourceName), (_, sourcePort)) =>
+          Ping(seqNo, NodeName(nodeName), NodeAddress(sourceAddr, sourcePort), NodeName(sourceName))
+        },
+        (msg: Ping) =>
+          (
+            ("Node", msg.targetNode.name),
+            ("SeqNo", msg.seqNo.toInt),
+            ("SourceAddr", msg.sourceAddress.addr),
+            ("SourceNode", msg.sourceNode.name),
+            ("SourcePort", msg.sourceAddress.port)
+          )
+      )
 
 //    implicit val pingReqCodec: MsgPackCodec[PingReq] =
 //      MsgPackCodec.fromReadWriter(macroRW[PingReq])
@@ -146,7 +180,34 @@ object messages {
   object Compound {
 
     implicit val codec = new MsgPackCodec[Compound] {
-      override def unsafeDecode(input: InputStream): Compound = ???
+      override def unsafeDecode(input: InputStream): Compound = {
+        //This is not MsgPack format this is custom serialization from go memberlist
+        val allBytes = Chunk.fromArray(input.readAllBytes())
+        if (allBytes.size < 1) {
+          throw new DeserializationTypeError("missing compound length byte")
+        }
+
+        val numParts = allBytes.head.toInt
+        // Check we have enough bytes
+        if (allBytes.size < numParts * 2) {
+          throw new DeserializationTypeError("truncated len slice")
+        }
+
+        // Decode the lengths
+        val lengths = Array.ofDim[Int](numParts)
+        (0 until numParts).foreach { i =>
+          val slice = allBytes.slice(i * 2, i * 2 + 2)
+          lengths.update(i, (slice.head & 0xff) << 8 | slice.last & 0xff)
+        }
+
+        var buf   = allBytes.drop(numParts * 2)
+        val parts = lengths.map { length =>
+          val part = buf.take(length)
+          buf = buf.drop(length)
+          part
+        }
+        Compound(Chunk.fromArray(parts))
+      }
 
       override def unsafeEncode(a: Compound, output: OutputStream): Unit = ???
     }

@@ -8,7 +8,7 @@ final case class Node(
 //  addr: InetAddress,
 //  port: Int,
   addr: NodeAddress,
-  meta: Chunk[Byte], // Metadata from the delegate for this node.
+  meta: Option[Chunk[Byte]], // Metadata from the delegate for this node.
   state: NodeState
 //  pMin: Int,
 //  pMax: Int,

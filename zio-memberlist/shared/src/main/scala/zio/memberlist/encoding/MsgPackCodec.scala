@@ -467,7 +467,6 @@ object MsgPackCodec {
         }
         output.write(s.toArray)
       }
-
   }
 
   implicit val string = new MsgPackCodec[String] {
@@ -538,6 +537,33 @@ object MsgPackCodec {
       }
 
     }
+  implicit def map2[A1, A2](implicit
+    codec1: MsgPackCodec[A1],
+    codec2: MsgPackCodec[A2],
+    stringCodec: MsgPackCodec[String]
+  ) =
+    new MsgPackCodec[((String, A1), (String, A2))] {
+      override def unsafeDecode(input: InputStream): ((String, A1), (String, A2)) = {
+        val n = input.read()
+        if (n == (MsgPackKeys.FixMapMask | 3)) {
+          (
+            stringCodec.unsafeDecode(input) -> codec1.unsafeDecode(input),
+            stringCodec.unsafeDecode(input) -> codec2.unsafeDecode(input)
+          )
+        } else {
+          throw new DeserializationTypeError("incorrect marker for Fix Map of 3 " + n.toHexString)
+        }
+      }
+
+      override def unsafeEncode(a: ((String, A1), (String, A2)), output: OutputStream): Unit = {
+        output.write(MsgPackKeys.FixMapMask | 3)
+        stringCodec.unsafeEncode(a._1._1, output)
+        codec1.unsafeEncode(a._1._2, output)
+        stringCodec.unsafeEncode(a._2._1, output)
+        codec2.unsafeEncode(a._2._2, output)
+      }
+
+    }
 
   implicit def map3[A1, A2, A3](implicit
     codec1: MsgPackCodec[A1],
@@ -567,6 +593,53 @@ object MsgPackCodec {
         codec2.unsafeEncode(a._2._2, output)
         stringCodec.unsafeEncode(a._3._1, output)
         codec3.unsafeEncode(a._3._2, output)
+      }
+
+    }
+
+  implicit def map5[A1, A2, A3, A4, A5](implicit
+    codec1: MsgPackCodec[A1],
+    codec2: MsgPackCodec[A2],
+    codec3: MsgPackCodec[A3],
+    codec4: MsgPackCodec[A4],
+    codec5: MsgPackCodec[A5],
+    stringCodec: MsgPackCodec[String]
+  ) =
+    new MsgPackCodec[
+      ((String, A1), (String, A2), (String, A3), (String, A4), (String, A5))
+    ] {
+      override def unsafeDecode(
+        input: InputStream
+      ): ((String, A1), (String, A2), (String, A3), (String, A4), (String, A5)) = {
+        val n = input.read()
+        if (n == (MsgPackKeys.FixMapMask | 5)) {
+          (
+            stringCodec.unsafeDecode(input) -> codec1.unsafeDecode(input),
+            stringCodec.unsafeDecode(input) -> codec2.unsafeDecode(input),
+            stringCodec.unsafeDecode(input) -> codec3.unsafeDecode(input),
+            stringCodec.unsafeDecode(input) -> codec4.unsafeDecode(input),
+            stringCodec.unsafeDecode(input) -> codec5.unsafeDecode(input)
+          )
+        } else {
+          throw new DeserializationTypeError("incorrect marker for Fix Map of 5 " + n.toHexString)
+        }
+      }
+
+      override def unsafeEncode(
+        a: ((String, A1), (String, A2), (String, A3), (String, A4), (String, A5)),
+        output: OutputStream
+      ): Unit = {
+        output.write(MsgPackKeys.FixMapMask | 5)
+        stringCodec.unsafeEncode(a._1._1, output)
+        codec1.unsafeEncode(a._1._2, output)
+        stringCodec.unsafeEncode(a._2._1, output)
+        codec2.unsafeEncode(a._2._2, output)
+        stringCodec.unsafeEncode(a._3._1, output)
+        codec3.unsafeEncode(a._3._2, output)
+        stringCodec.unsafeEncode(a._4._1, output)
+        codec4.unsafeEncode(a._4._2, output)
+        stringCodec.unsafeEncode(a._5._1, output)
+        codec5.unsafeEncode(a._5._2, output)
       }
 
     }

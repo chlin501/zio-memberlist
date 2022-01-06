@@ -72,7 +72,9 @@ class NetTransport(
       .commit
       .flatMap {
         case Some(channel) =>
-          ZIO.effect(channel.write(ByteBuffer.wrap(payload.toArray))).mapError(ExceptionWrapper(_))
+          ZIO.effect {
+            channel.write(ByteBuffer.wrap(payload.toArray))
+          }.mapError(ExceptionWrapper(_))
         case None          =>
           ZIO.fail(ConnectionNotFound(connectionId))
       }
@@ -80,7 +82,7 @@ class NetTransport(
       .unit
 
   override val receiveBestEffort: UStream[Either[TransportError, (NodeAddress, Chunk[Byte])]] =
-    ZStream.fromEffect(
+    ZStream.repeatEffect(
       Buffer
         .byte(mtu)
         .flatMap(buffer =>

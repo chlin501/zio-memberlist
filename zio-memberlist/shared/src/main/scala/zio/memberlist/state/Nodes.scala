@@ -56,7 +56,7 @@ trait Nodes {
   /**
    * Lists members that are in healthy state.
    */
-  def healthyNodes: USTM[List[(NodeName, Node)]]
+  def allNodes: USTM[List[Node]]
 
   /**
    * Returns string with cluster state.
@@ -158,8 +158,8 @@ object Nodes {
       val numberOfNodes: USTM[Int] =
         nodeStates.keys.map(_.size)
 
-      def healthyNodes: USTM[List[(NodeName, Node)]] =
-        nodeStates.toList.map(_.filter(entry => entry._2.state == NodeState.Alive && entry._1 != localNodeName))
+      def allNodes: USTM[List[Node]] =
+        nodeStates.values
 
       val prettyPrint: USTM[String] =
         nodeStates.toList.map(nodes =>

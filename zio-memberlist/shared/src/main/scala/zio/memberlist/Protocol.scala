@@ -36,7 +36,7 @@ trait Protocol[M] {
         self.produceMessages.mapM(_.transformM(to))
 
       /**
-       * Handler for incomming messages.
+       * Handler for incoming messages.
        */
       override def onReliableMessage: (ConnectionId, M1) => IO[Error, Message[M1]] = (id, msg) =>
         from(msg)
@@ -45,12 +45,12 @@ trait Protocol[M] {
     }
 
   /**
-   * Handler for incomming messages.
+   * Handler for incoming messages.
    */
   def onBestEffortMessage: (NodeAddress, M) => IO[Error, Message[M]]
 
   /**
-   * Handler for incomming messages.
+   * Handler for incoming messages.
    */
   def onReliableMessage: (ConnectionId, M) => IO[Error, Message[M]]
 
@@ -88,7 +88,7 @@ object Protocol {
       }
 
       /**
-       * Handler for incomming messages.
+       * Handler for incoming messages.
        */
       override def onReliableMessage: (ConnectionId, A) => IO[Error, Message[A]] = {
         case (connectionId, message: A1) => a1.onReliableMessage(connectionId, message)
@@ -124,7 +124,7 @@ object Protocol {
       }
 
       /**
-       * Handler for incomming messages.
+       * Handler for incoming messages.
        */
       override def onReliableMessage: (ConnectionId, A) => IO[Error, Message[A]] = {
         case (connectionId, message: A1) => a1.onReliableMessage(connectionId, message)
@@ -154,7 +154,7 @@ object Protocol {
             out.provide(env)
 
           /**
-           * Handler for incomming messages.
+           * Handler for incoming messages.
            */
           override def onReliableMessage: (ConnectionId, M) => IO[Error, Message[M]] =
             (id, msg) => reliable(id, msg).provide(env)

@@ -20,7 +20,7 @@ object IncarnationSequence {
   def nextAfter(i: Long): URSTM[Has[IncarnationSequence], Long] =
     ZSTM.accessM[Has[IncarnationSequence]](_.get.nextAfter(i))
 
-  def live: ULayer[Has[IncarnationSequence]] =
+  val live: ULayer[Has[IncarnationSequence]] =
     TRef
       .makeCommit[Long](0)
       .map(ref =>

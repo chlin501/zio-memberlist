@@ -61,7 +61,11 @@ final class MessageSink(
           logger.throwable("error during processing messages.", err)
         case Right(msg) =>
           //TODO handle error here properly
-          protocol.onBestEffortMessage.tupled(msg).either
+          protocol.onBestEffortMessage
+            .tupled(msg)
+            .flatMap(send)
+            .tapError(logger.throwable("error during processing incoming message.", _))
+            .either
       }
       .runDrain
       .fork *>

@@ -2,6 +2,8 @@ package zio.memberlist
 import zio.console.putStrLn
 import zio.duration._
 import zio.memberlist.encoding.MsgPackCodec
+import zio.memberlist.protocols.messages.Compound
+import zio.memberlist.protocols.messages.FailureDetection.{Ack, Ping}
 import zio.memberlist.protocols.messages.Initial.{NodeViewSnapshot, PushPull}
 import zio.memberlist.state.{NodeName, NodeState}
 import zio.memberlist.transport.{MemberlistTransport, NetTransport}
@@ -37,33 +39,57 @@ class LocalTransport(port: Int) extends zio.App {
 
   val program = {
     for {
+      _ <- MemberlistTransport.receiveBestEffort.collectRight.mapM { case (addr, chunk) =>
+             val tag = chunk.head
+             (tag match {
+               case 12 =>
+                 val newTag = chunk.drop(5).head
+                 putStrLn("check_sum: " + chunk.take(5).drop(1)) *>
+                   putStrLn("tag: " + chunk.drop(5).head) *>
+                   (newTag match {
+                     case 7 =>
+                       putStrLn("compound") *>
+                         MsgPackCodec[Compound].decode(chunk.drop(6))
+                     case _ => ZIO.unit
+                   })
+               case _  =>
+                 putStrLn("tag: " + tag)
+
+             }) *> putStrLn("best effort " + new String(chunk.toArray))
+           }.runCollect.fork
       _ <- MemberlistTransport.receiveReliable
              .mapMPar(10) { conn =>
                ZIO.effect {
-                 val tag = conn.stream.read()
-
-                 MsgPackCodec[PushPull].unsafeDecode(conn.stream)
-
-                 //s"fixmap: ${InetAddress.getByAddress(addr)}, $incarnation, $meta, $name, $port, $state, $vst"
-               }.zipLeft {
-
-                 MsgPackCodec[PushPull]
-                   .encode(
-                     PushPull(
-                       nodes = Chunk.single(
-                         NodeViewSnapshot(
-                           name = NodeName("local_node_" + port),
-                           nodeAddress =
-                             NodeAddress(Chunk.fromArray(InetAddress.getByName("localhost").getAddress), port),
-                           meta = None,
-                           incarnation = 1,
-                           state = NodeState.Alive
-                         )
-                       ),
-                       join = true
+                 conn.stream.read()
+               }.flatMap {
+                 case 0 =>
+                   MsgPackCodec[Ping]
+                     .decode(conn.stream)
+                     .tap(ping =>
+                       MsgPackCodec[Ack]
+                         .encode(Ack(ping.seqNo, Chunk.empty))
+                         .flatMap(payload => MemberlistTransport.sendReliably(conn.id, payload.prepended(2)))
                      )
-                   )
-                   .flatMap(payload => MemberlistTransport.sendReliably(conn.id, payload.prepended(6)))
+                 //putStrLn("ping: " + new String(conn.stream.readAllBytes()))
+
+                 case 6 =>
+                   MsgPackCodec[PushPull].decode(conn.stream) <* MsgPackCodec[PushPull]
+                     .encode(
+                       PushPull(
+                         nodes = Chunk.single(
+                           NodeViewSnapshot(
+                             name = NodeName("local_node_" + port),
+                             nodeAddress =
+                               NodeAddress(Chunk.fromArray(InetAddress.getByName("localhost").getAddress), port),
+                             meta = None,
+                             incarnation = 1,
+                             state = NodeState.Alive
+                           )
+                         ),
+                         join = true
+                       )
+                     )
+                     .flatMap(payload => MemberlistTransport.sendReliably(conn.id, payload.prepended(6)))
                }
                  .flatMap(msg => putStrLn("" + conn.id + " aaa " + msg))
              }

@@ -2,11 +2,12 @@ package zio.memberlist
 
 import zio.ZManaged.Finalizer
 import zio.memberlist.TransportError.ConnectionNotFound
+import zio.memberlist.encoding.MsgPackCodec
 import zio.memberlist.transport.MemberlistTransport.Connection
 import zio.memberlist.transport.{ConnectionId, MemberlistTransport}
-import zio.stm.{TMap, TQueue, USTM, ZSTM}
+import zio.stm.{TMap, TQueue, ZSTM}
 import zio.stream._
-import zio.{Chunk, Has, IO, UIO, ULayer}
+import zio.{Chunk, Has, IO, UIO, ULayer, ZIO}
 
 import java.io.ByteArrayInputStream
 
@@ -42,17 +43,17 @@ class TestTransport(
   override val receiveReliable: UStream[MemberlistTransport.Connection] =
     Stream.fromTQueue(receiveReliableMessages).tap(conn => connectionCache.put(conn.id, conn).commit)
 
-  val allSentBestEffortMessages: USTM[List[(NodeAddress, Chunk[Byte])]] =
-    sendBestEffortMessages.takeAll
+  val allSentBestEffortMessages: UIO[List[(NodeAddress, Chunk[Byte])]] =
+    sendBestEffortMessages.takeAll.commit
 
-  val allSentReliableMessages: USTM[List[(NodeAddress, Chunk[Byte])]] =
-    sendReliablyMessages.takeAll
+  val allSentReliableMessages: UIO[List[(NodeAddress, Chunk[Byte])]] =
+    sendReliablyMessages.takeAll.commit
 
-  val allSentReliableByConnectionMessages: USTM[List[(ConnectionId, Chunk[Byte])]] =
-    sendReliablyByConnectionMessages.takeAll
+  val allSentReliableByConnectionMessages: UIO[List[(ConnectionId, Chunk[Byte])]] =
+    sendReliablyByConnectionMessages.takeAll.commit
 
-  final def simulateBestEffortMessage(nodeAddress: NodeAddress, payload: Chunk[Byte]) =
-    receiveBestEffortMessages.offer(Right((nodeAddress, payload)))
+  final def simulateBestEffortMessage(nodeAddress: NodeAddress, payload: Chunk[Byte]): UIO[Unit] =
+    receiveBestEffortMessages.offer(Right((nodeAddress, payload))).commit
 
   final def simulateNewConnection(payload: Chunk[Byte]): UIO[Unit] =
     for {
@@ -64,6 +65,31 @@ class TestTransport(
 }
 
 object TestTransport {
+
+  val allSentBestEffortMessages: ZIO[Has[TestTransport], Nothing, List[(NodeAddress, Chunk[Byte])]] =
+    ZIO.accessM(_.get.allSentBestEffortMessages)
+
+  val allSentReliableMessages: ZIO[Has[TestTransport], Nothing, List[(NodeAddress, Chunk[Byte])]] =
+    ZIO.accessM(_.get.allSentReliableMessages)
+
+  val allSentReliableByConnectionMessages: ZIO[Has[TestTransport], Nothing, List[(ConnectionId, Chunk[Byte])]] =
+    ZIO.accessM(_.get.allSentReliableByConnectionMessages)
+
+  final def simulateBestEffortMessage(
+    nodeAddress: NodeAddress,
+    payload: Chunk[Byte]
+  ): ZIO[Has[TestTransport], Nothing, Unit] =
+    ZIO.accessM(_.get.simulateBestEffortMessage(nodeAddress, payload))
+
+  final def simulateBestEffortMessage[A: MsgPackCodec](
+    nodeAddress: NodeAddress,
+    payload: A
+  ): ZIO[Has[TestTransport], SerializationError, Unit] =
+    MsgPackCodec[A].encode(payload).flatMap(chunk => ZIO.accessM(_.get.simulateBestEffortMessage(nodeAddress, chunk)))
+
+  final def simulateNewConnection(payload: Chunk[Byte]): ZIO[Has[TestTransport], Nothing, Unit] =
+    ZIO.accessM(_.get.simulateNewConnection(payload))
+
   val live: ULayer[Has[TestTransport] with Has[MemberlistTransport]] =
     ZSTM.atomically {
       for {
