@@ -14,7 +14,7 @@ final case class NodeAddress(addr: Chunk[Byte], port: Int) {
       sa   <- InetSocketAddress.inetAddress(addr, port)
     } yield sa).mapError(ExceptionWrapper(_))
 
-  override def toString: String = JInetAddress.getByAddress(addr.toArray) + ": " + port
+  override def toString: String = JInetAddress.getByAddress(addr.toArray).toString + ": " + port
 }
 
 object NodeAddress {
